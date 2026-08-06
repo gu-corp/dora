@@ -19,6 +19,9 @@ on:
         required: true
         type: string
 
+# Shown as the run title in the Actions list, e.g. "Release v1.2.3 by @alice"
+run-name: "Release ${{ inputs.tag }} by @${{ github.actor }}"
+
 permissions:
   contents: write   # needed to create the GitHub Release
   packages: write   # needed to push the image to ghcr.io
@@ -41,13 +44,25 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
 
-      - name: Verify tag exists
+      - name: Verify tag & write summary
         run: |
           if ! git rev-parse -q --verify "refs/tags/${{ inputs.tag }}" >/dev/null; then
             echo "::error::tag '${{ inputs.tag }}' not found. Push the tag before running this workflow."
             exit 1
           fi
-          echo "Building tag ${{ inputs.tag }} @ $(git rev-parse --short HEAD)"
+          sha="$(git rev-parse --short HEAD)"
+          echo "::notice::Building tag ${{ inputs.tag }} (${sha}) triggered by @${{ github.actor }}"
+          {
+            echo "### 🚀 Release ${{ inputs.tag }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Tag** | \`${{ inputs.tag }}\` |"
+            echo "| **Commit** | \`${sha}\` |"
+            echo "| **Triggered by** | @${{ github.actor }} |"
+            echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}\` |"
+            echo "| **Platforms** | linux/amd64, linux/arm64 |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
