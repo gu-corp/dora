@@ -44,9 +44,9 @@
             </div>
             {{ end }}
             <div class="row border-bottom p-2 mx-0">
-              <div class="col-md-3"><span data-bs-toggle="tooltip" data-bs-placement="top" title="Current ETH balance">Balance:</span></div>
+              <div class="col-md-3"><span data-bs-toggle="tooltip" data-bs-placement="top" title="Current {{ currencySymbol }} balance">Balance:</span></div>
               <div class="col-md-9">
-                <span id="eth-balance-value">{{ formatFloat .EthBalance 6 }}</span> ETH
+                <span id="eth-balance-value">{{ formatFloat .EthBalance 6 }}</span> {{ currencySymbol }}
               </div>
             </div>
             {{ if gt .FirstFunded 0 }}

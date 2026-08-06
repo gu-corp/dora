@@ -36,7 +36,7 @@
               {{ if $evt.EventName }}
               <br><span class="badge bg-warning text-dark mt-1" style="font-size: 0.65rem; white-space: normal; word-break: break-word;" data-bs-toggle="tooltip" title="{{ $evt.EventName }}">{{ $evt.EventName }}</span>
               {{ if $evt.EthTransferValue }}
-              <br><span class="badge bg-success mt-1" style="font-size: 0.65rem;" data-bs-toggle="tooltip" title="ETH amount transferred (EIP-7708 decoded)">{{ $evt.EthTransferValue }}</span>
+              <br><span class="badge bg-success mt-1" style="font-size: 0.65rem;" data-bs-toggle="tooltip" title="{{ currencySymbol }} amount transferred (EIP-7708 decoded)">{{ $evt.EthTransferValue }}</span>
               {{ end }}
               {{ end }}
             </td>

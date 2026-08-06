@@ -23,7 +23,9 @@ type Config struct {
 	} `yaml:"server"`
 
 	Chain struct {
-		DisplayName string `yaml:"displayName" envconfig:"CHAIN_DISPLAY_NAME"`
+		DisplayName    string `yaml:"displayName" envconfig:"CHAIN_DISPLAY_NAME"`
+		CurrencySymbol string `yaml:"currencySymbol" envconfig:"CHAIN_CURRENCY_SYMBOL"` // display symbol/ticker for the native currency (default "ETH")
+		CurrencyName   string `yaml:"currencyName" envconfig:"CHAIN_CURRENCY_NAME"`     // full display name for the native currency (default "Ether")
 
 		// optional features
 		WhiskForkEpoch *uint64 `yaml:"whiskForkEpoch" envconfig:"WHISK_FORK_EPOCH"`

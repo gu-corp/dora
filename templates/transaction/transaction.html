@@ -126,13 +126,13 @@
         <div class="row border-bottom p-2 mx-0">
           <div class="col-md-3"><span data-bs-toggle="tooltip" data-bs-placement="top" title="Value transferred">Value:</span></div>
           <div class="col-md-9">
-            {{ formatFloat .Amount 18 }} ETH
+            {{ formatFloat .Amount 18 }} {{ currencySymbol }}
           </div>
         </div>
         <div class="row p-2 mx-0">
           <div class="col-md-3"><span data-bs-toggle="tooltip" data-bs-placement="top" title="Transaction fee">Transaction Fee:</span></div>
           <div class="col-md-9">
-            {{ formatFloat .TxFee 18 }} ETH
+            {{ formatFloat .TxFee 18 }} {{ currencySymbol }}
           </div>
         </div>
       </div>

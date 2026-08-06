@@ -59,7 +59,7 @@
                         <span data-bs-toggle="tooltip" title="0x{{ printf "%x" $transaction.To }}">0x{{ printf "%x" $transaction.To }}</span>
                       {{ end }}
                     </td>
-                    <td>{{ $transaction.Value }} ETH</td>
+                    <td>{{ $transaction.Value }} {{ currencySymbol }}</td>
                     <td>
                       {{ if index $inclusionList.TransactionsIncluded $j }}
                         <span class="badge rounded-pill text-bg-success">Yes</span>

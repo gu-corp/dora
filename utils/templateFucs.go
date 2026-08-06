@@ -123,6 +123,8 @@ func GetTemplateFuncs() template.FuncMap {
 		"formatBitlist":                 FormatBitlist,
 		"formatBitvectorValidators":     formatBitvectorValidators,
 		"formatParticipation":           FormatParticipation,
+		"currencySymbol":                CurrencySymbol,
+		"currencyName":                  CurrencyName,
 		"formatEthFromGwei":             FormatETHFromGwei,
 		"formatEthFromGweiP":            FormatETHFromGweiP,
 		"formatEthFromGweiShort":        FormatETHFromGweiShort,

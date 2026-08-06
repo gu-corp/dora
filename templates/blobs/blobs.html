@@ -68,7 +68,7 @@
         <div class="col-md-12">
           <div class="mb-4">
             <label for="ethSlider" class="form-label">
-              <span>ETH Staked:</span>
+              <span>{{ currencySymbol }} Staked:</span>
             </label>
             <div class="row g-3 align-items-center mb-2">
               <div class="col-md-9">
@@ -85,7 +85,7 @@
                          max="{{ .StorageCalculator.MaxEth }}"
                          value="{{ .StorageCalculator.DefaultEth }}"
                          step="1">
-                  <span class="input-group-text">ETH</span>
+                  <span class="input-group-text">{{ currencySymbol }}</span>
                 </div>
               </div>
             </div>
@@ -127,10 +127,10 @@
             </h6>
             <div class="collapse" id="howItWorksCollapse">
               <ul class="small mb-0 mt-2">
-                <li>Non-validating nodes (0 ETH): <strong>{{ .StorageCalculator.CustodyRequirement }} columns minimum</strong></li>
-                <li>Validating nodes ({{ .StorageCalculator.MaxEffectiveBalanceEth }}-{{ mul .StorageCalculator.ValidatorCustodyRequirement .StorageCalculator.MaxEffectiveBalanceEth }} ETH): <strong>{{ .StorageCalculator.ValidatorCustodyRequirement }} columns (free threshold)</strong></li>
-                <li>{{ mul .StorageCalculator.ValidatorCustodyRequirement .StorageCalculator.MaxEffectiveBalanceEth }}-{{ .StorageCalculator.MaxEth }} ETH: <strong>+1 column per additional {{ .StorageCalculator.MaxEffectiveBalanceEth }} ETH</strong></li>
-                <li>{{ .StorageCalculator.MaxEth }}+ ETH: <strong>{{ .StorageCalculator.TotalColumns }} columns (full custody)</strong></li>
+                <li>Non-validating nodes (0 {{ currencySymbol }}): <strong>{{ .StorageCalculator.CustodyRequirement }} columns minimum</strong></li>
+                <li>Validating nodes ({{ .StorageCalculator.MaxEffectiveBalanceEth }}-{{ mul .StorageCalculator.ValidatorCustodyRequirement .StorageCalculator.MaxEffectiveBalanceEth }} {{ currencySymbol }}): <strong>{{ .StorageCalculator.ValidatorCustodyRequirement }} columns (free threshold)</strong></li>
+                <li>{{ mul .StorageCalculator.ValidatorCustodyRequirement .StorageCalculator.MaxEffectiveBalanceEth }}-{{ .StorageCalculator.MaxEth }} {{ currencySymbol }}: <strong>+1 column per additional {{ .StorageCalculator.MaxEffectiveBalanceEth }} {{ currencySymbol }}</strong></li>
+                <li>{{ .StorageCalculator.MaxEth }}+ {{ currencySymbol }}: <strong>{{ .StorageCalculator.TotalColumns }} columns (full custody)</strong></li>
                 <li>Blob retention: <strong>{{ .StorageCalculator.MinEpochsForBlobSidecarsRequests }} epochs (~18 days)</strong></li>
                 <li>Blobs are erasure coded: <strong>128 KiB → 256 KiB ({{ .StorageCalculator.TotalColumns }} columns × {{ div .StorageCalculator.ColumnSizeBytes 1024 }} KiB each)</strong></li>
                 <li>Storage per blob: <strong>{{ div .StorageCalculator.ColumnSizeBytes 1024 }} KiB × columns custodied</strong></li>
