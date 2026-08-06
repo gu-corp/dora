@@ -1,22 +1,26 @@
 name: Release (ghcr)
 
-# Manual release: publishing the Docker image and creating the GitHub Release
-# only happen when this workflow is triggered by hand.
+# Manual, tag-based release.
 #
-#   Actions tab -> "Release (ghcr)" -> Run workflow -> enter version (e.g. 1.2.3)
+# Flow:
+#   1. Create & push the tag on the exact commit you want to release:
+#        git tag v1.2.3
+#        git push origin v1.2.3
+#   2. Actions tab -> "Release (ghcr)" -> Run workflow -> enter the tag (v1.2.3)
 #
-# It then builds the multi-arch image, pushes it to ghcr.io, and creates a
-# matching GitHub Release (which also creates the v<version> git tag).
+# The build checks out that exact tag, so the image always matches the tagged
+# commit. It then pushes the multi-arch image to ghcr.io and creates a GitHub
+# Release for the (already existing) tag.
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version number WITHOUT leading v (e.g. 1.2.3)"
+      tag:
+        description: "Existing git tag to build & release (e.g. v1.2.3)"
         required: true
         type: string
 
 permissions:
-  contents: write   # needed to create the GitHub Release + tag
+  contents: write   # needed to create the GitHub Release
   packages: write   # needed to push the image to ghcr.io
 
 env:
@@ -29,8 +33,21 @@ jobs:
     name: Build & push Docker image
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      # Check out the exact tag being released (not the branch this workflow
+      # was dispatched from) so the image matches the tagged commit.
+      - name: Checkout tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify tag exists
+        run: |
+          if ! git rev-parse -q --verify "refs/tags/${{ inputs.tag }}" >/dev/null; then
+            echo "::error::tag '${{ inputs.tag }}' not found. Push the tag before running this workflow."
+            exit 1
+          fi
+          echo "Building tag ${{ inputs.tag }} @ $(git rev-parse --short HEAD)"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -51,8 +68,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=v${{ inputs.version }}
-            type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
+            type=raw,value=${{ inputs.tag }}
+            type=raw,value=latest,enable=${{ !contains(inputs.tag, '-') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -64,7 +81,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Embeds the version into the binary via Dockerfile `ARG release` -> make RELEASE=...
           build-args: |
-            release=v${{ inputs.version }}
+            release=${{ inputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -76,15 +93,14 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version }}
-          name: v${{ inputs.version }}
-          target_commitish: ${{ github.sha }}
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
           draft: false
-          # versions containing a hyphen (1.2.3-rc1) are treated as pre-releases
-          prerelease: ${{ contains(inputs.version, '-') }}
+          # tags containing a hyphen (v1.2.3-rc1) are treated as pre-releases
+          prerelease: ${{ contains(inputs.tag, '-') }}
           generate_release_notes: true
           body: |
             ### Docker image
             ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ inputs.version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
             ```
