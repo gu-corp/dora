@@ -310,7 +310,7 @@
           html += '<td>' + typeBadge(tx.type) + '</td>';
           html += '<td class="text-monospace">' + addressLink(tx.from) + '</td>';
           html += '<td class="text-monospace">' + (tx.to ? addressLink(tx.to) : '<span class="text-muted">-</span>') + '</td>';
-          html += '<td' + tooltipAttrs(formatEth(tx.value) + ' ETH') + '>' + escapeHtml(formatEth(tx.value)) + ' ETH</td>';
+          html += '<td' + tooltipAttrs(formatEth(tx.value) + ' {{ currencySymbol }}') + '>' + escapeHtml(formatEth(tx.value)) + ' {{ currencySymbol }}</td>';
         } else {
           html += '<td colspan="4" class="text-muted">not decodable</td>';
         }

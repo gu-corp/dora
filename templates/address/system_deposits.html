@@ -112,7 +112,7 @@
                 <span data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="{{ .BlockTime }}">{{ formatRecentTimeShort .BlockTime }}</span>
               </td>
               <td class="text-monospace">
-                {{ formatFloat .Amount 6 }} ETH
+                {{ formatFloat .Amount 6 }} {{ currencySymbol }}
               </td>
             </tr>
             {{ end }}
