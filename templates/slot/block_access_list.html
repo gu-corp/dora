@@ -710,17 +710,17 @@
     // Helper functions
     function formatBalance(balanceData) {
       // Convert balance to ETH (assuming balanceData is in wei)
-      if (!balanceData) return '0 ETH';
+      if (!balanceData) return '0 {{ currencySymbol }}';
       
       const weiValue = BigInt(arrayToHex(balanceData));
       const ethValue = Number(weiValue) / 1e18;
       
       if (ethValue === 0) {
-        return '0 ETH';
+        return '0 {{ currencySymbol }}';
       } else if (ethValue >= 1) {
-        return ethValue.toFixed(6).replace(/\.?0+$/, '') + ' ETH';
+        return ethValue.toFixed(6).replace(/\.?0+$/, '') + ' {{ currencySymbol }}';
       } else {
-        return ethValue.toFixed(18).replace(/\.?0+$/, '') + ' ETH';
+        return ethValue.toFixed(18).replace(/\.?0+$/, '') + ' {{ currencySymbol }}';
       }
     }
     
@@ -741,7 +741,7 @@
       const cssClass = diff > 0n ? 'positive' : 'negative';
       const sign = diff > 0n ? '+' : '-';
       
-      return `<span class="bal-balance-diff ${cssClass}"> ${sign}${formattedDiff} ETH</span>`;
+      return `<span class="bal-balance-diff ${cssClass}"> ${sign}${formattedDiff} {{ currencySymbol }}</span>`;
     }
     
     function arrayToHex(input) {
@@ -1843,7 +1843,7 @@
           </div>
           <div class="tx-callout-row">
             <span class="tx-callout-label">Value:</span>
-            <span class="tx-callout-value">${formatEthValue(tx.value)} ETH</span>
+            <span class="tx-callout-value">${formatEthValue(tx.value)} {{ currencySymbol }}</span>
           </div>
           ${tx.func_name ? `
           <div class="tx-callout-row">

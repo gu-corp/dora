@@ -9,6 +9,8 @@ logging:
 # Chain network configuration
 chain:
   #displayName: "Ephemery Iteration xy"
+  #currencySymbol: "ETH" # short symbol/ticker shown after amounts across the UI (defaults to "ETH")
+  #currencyName: "Ether" # full currency name used in labels like "Staked Ether" (defaults to "Ether")
 
 # HTTP Server configuration
 server:

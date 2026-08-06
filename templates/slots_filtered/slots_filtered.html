@@ -393,7 +393,7 @@
                       {{ end }}</td>
                     {{- end }}
                     {{- if $g.DisplayBuilderPayment }}
-                      <td>{{ if $slot.HasBuilderPayment }}<span data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="{{ formatEthAddCommasFromGwei $slot.BuilderPaymentWeight }} ETH of {{ formatEthAddCommasFromGwei $slot.BuilderPaymentBase }} ETH per-slot base — quorum ≥{{ $g.BuilderPaymentQuorum }}%" class="{{ if $slot.BuilderPaymentMetQuorum }}text-success{{ else }}text-danger{{ end }}">{{ formatFloat $slot.BuilderPaymentPercent 1 }}%</span>{{ end }}</td>
+                      <td>{{ if $slot.HasBuilderPayment }}<span data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="{{ formatEthAddCommasFromGwei $slot.BuilderPaymentWeight }} {{ currencySymbol }} of {{ formatEthAddCommasFromGwei $slot.BuilderPaymentBase }} {{ currencySymbol }} per-slot base — quorum ≥{{ $g.BuilderPaymentQuorum }}%" class="{{ if $slot.BuilderPaymentMetQuorum }}text-success{{ else }}text-danger{{ end }}">{{ formatFloat $slot.BuilderPaymentPercent 1 }}%</span>{{ end }}</td>
                     {{- end }}
                     {{- if $g.DisplayMevBlock }}
                       <td>{{ if not (eq $slot.Status 0) }}

@@ -20,13 +20,31 @@ import (
 	"golang.org/x/text/message"
 )
 
+// CurrencySymbol returns the display symbol/ticker for the native currency,
+// configurable via chain.currencySymbol (defaults to "ETH").
+func CurrencySymbol() string {
+	if Config != nil && Config.Chain.CurrencySymbol != "" {
+		return Config.Chain.CurrencySymbol
+	}
+	return "ETH"
+}
+
+// CurrencyName returns the full display name for the native currency,
+// configurable via chain.currencyName (defaults to "Ether").
+func CurrencyName() string {
+	if Config != nil && Config.Chain.CurrencyName != "" {
+		return Config.Chain.CurrencyName
+	}
+	return "Ether"
+}
+
 func FormatETH(num string) string {
 	floatNum, _ := strconv.ParseFloat(num, 64)
-	return fmt.Sprintf("%.4f", floatNum/math.Pow10(18)) + " ETH"
+	return fmt.Sprintf("%.4f", floatNum/math.Pow10(18)) + " " + CurrencySymbol()
 }
 
 func FormatETHFromGwei(gwei uint64) string {
-	return fmt.Sprintf("%.4f", float64(gwei)/math.Pow10(9)) + " ETH"
+	return fmt.Sprintf("%.4f", float64(gwei)/math.Pow10(9)) + " " + CurrencySymbol()
 }
 
 func FormatETHFromGweiShort(gwei uint64) string {
@@ -39,7 +57,7 @@ func FormatETHFromGweiP(gwei uint64, precision int) string {
 }
 
 func FormatFullEthFromGwei(gwei uint64) string {
-	return fmt.Sprintf("%v ETH", uint64(float64(gwei)/math.Pow10(9)))
+	return fmt.Sprintf("%v %s", uint64(float64(gwei)/math.Pow10(9)), CurrencySymbol())
 }
 
 func FormatETHAddCommasFromGwei(gwei uint64) template.HTML {
@@ -130,7 +148,7 @@ func FormatBaseFee(weiValue uint64) template.HTML {
 	// Show in ETH for very large values with 6 decimals, trimmed
 	ethValue := gweiValue / 1e9
 	formatted := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", ethValue), "0"), ".")
-	return template.HTML(formatted + " ETH")
+	return template.HTML(formatted + " " + CurrencySymbol())
 }
 
 func FormatBlobFeeDifference(eip7918Value, originalValue uint64) template.HTML {
@@ -166,7 +184,7 @@ func FormatTransactionValue(ethValue float64) template.HTML {
 
 	// Show in ETH for large values with 6 decimals, trimmed
 	formatted := strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", ethValue), "0"), ".")
-	return template.HTML(formatted + " ETH")
+	return template.HTML(formatted + " " + CurrencySymbol())
 }
 
 // FormatTransactionFee formats a transaction fee in ETH with intelligent rounding.
@@ -376,6 +394,7 @@ func formatAmount(amount *big.Int, unit string, digits int, maxPreCommaDigitsBef
 	displayUnit := " " + unit
 	var unitDigits int
 	if unit == "ETH" || unit == "Ether" {
+		displayUnit = " " + CurrencySymbol()
 		unitDigits = 18
 	} else if unit == "GWei" {
 		unitDigits = 9
@@ -697,7 +716,7 @@ func FormatWeiAmount(weiStr string) template.HTML {
 	ethRat := new(big.Rat).SetFrac(wei, ethDen)
 	s := ethRat.FloatString(6)
 	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	return template.HTML(template.HTMLEscapeString(s) + " ETH")
+	return template.HTML(template.HTMLEscapeString(s) + " " + CurrencySymbol())
 }
 
 // FormatWeiDeltaAmount formats a signed wei delta (base-10 string) into
@@ -741,7 +760,7 @@ func FormatWeiDeltaAmount(diffWeiStr string) template.HTML {
 	ethRat := new(big.Rat).SetFrac(abs, ethDen)
 	s := ethRat.FloatString(6)
 	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	return template.HTML(sign + template.HTMLEscapeString(s) + " ETH")
+	return template.HTML(sign + template.HTMLEscapeString(s) + " " + CurrencySymbol())
 }
 
 // FormatHexBytesShort formats bytes as a 0x-prefixed hex string truncated in the middle:

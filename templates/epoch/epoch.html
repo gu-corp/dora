@@ -86,11 +86,11 @@
           <div class="col-md-3">Target Votes:</div>
           <div class="col-md-9">
             <div>
-              {{ formatEthAddCommasFromGwei .TargetVoted }} ETH of
-              {{ formatEthAddCommasFromGwei .EligibleEther }} ETH count for finality
+              {{ formatEthAddCommasFromGwei .TargetVoted }} {{ currencySymbol }} of
+              {{ formatEthAddCommasFromGwei .EligibleEther }} {{ currencySymbol }} count for finality
               <small class="text-muted ml-1">({{ formatFloat .TargetVoteParticipation 2 }}%)</small>
               {{ if gt .TargetVotedSlashed 0 }}
-              <small class="text-warning ml-1">+ {{ formatEthAddCommasFromGwei .TargetVotedSlashed }} ETH slashed ({{ formatFloat .TargetVoteSlashedParticipation 2 }}%) ignored</small>
+              <small class="text-warning ml-1">+ {{ formatEthAddCommasFromGwei .TargetVotedSlashed }} {{ currencySymbol }} slashed ({{ formatFloat .TargetVoteSlashedParticipation 2 }}%) ignored</small>
               {{ end }}
             </div>
             <div class="position-relative" style="max-width: 520px;">
@@ -110,8 +110,8 @@
           <div class="col-md-3">Head Votes:</div>
           <div class="col-md-9">
             <div>
-              {{ formatEthAddCommasFromGwei .HeadVoted }} ETH of
-              {{ formatEthAddCommasFromGwei .EligibleEther }} ETH
+              {{ formatEthAddCommasFromGwei .HeadVoted }} {{ currencySymbol }} of
+              {{ formatEthAddCommasFromGwei .EligibleEther }} {{ currencySymbol }}
               <small class="text-muted ml-1">({{ formatFloat .HeadVoteParticipation 2 }}%)</small>
             </div>
             <div class="progress" style="height: 18px; max-width: 520px;">
