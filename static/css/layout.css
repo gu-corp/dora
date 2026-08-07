@@ -243,6 +243,10 @@ header nav .dropdown-item .nav-icon {
   white-space: nowrap;
 }
 
+.table.table-nobr thead th {
+  white-space: nowrap;
+}
+
 .table .template-row {
   display: none;
 }
