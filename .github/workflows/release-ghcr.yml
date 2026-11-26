@@ -8,9 +8,10 @@ name: Release (ghcr)
 #        git push origin v1.2.3
 #   2. Actions tab -> "Release (ghcr)" -> Run workflow -> enter the tag (v1.2.3)
 #
-# The build checks out that exact tag, so the image always matches the tagged
-# commit. It then pushes the multi-arch image to ghcr.io and creates a GitHub
-# Release for the (already existing) tag.
+# Each platform is built natively on its own runner (amd64 on ubuntu-latest,
+# arm64 on ubuntu-24.04-arm — no QEMU emulation) and pushed by digest. The
+# merge job then assembles the multi-arch tag, and a GitHub Release is created
+# for the (already existing) tag.
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +23,10 @@ on:
 # Shown as the run title in the Actions list, e.g. "Release v1.2.3 by @alice"
 run-name: "Release ${{ inputs.tag }} by @${{ github.actor }}"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: true
+
 permissions:
   contents: write   # needed to create the GitHub Release
   packages: write   # needed to push the image to ghcr.io
@@ -32,40 +37,87 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  docker:
-    name: Build & push Docker image
-    runs-on: ubuntu-latest
+  build:
+    name: Build Docker image (${{ matrix.arch }})
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       # Check out the exact tag being released (not the branch this workflow
       # was dispatched from) so the image matches the tagged commit.
       - name: Checkout tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 0
+          ref: refs/tags/${{ inputs.tag }}
 
-      - name: Verify tag & write summary
+      - name: Verify tag
         run: |
-          if ! git rev-parse -q --verify "refs/tags/${{ inputs.tag }}" >/dev/null; then
-            echo "::error::tag '${{ inputs.tag }}' not found. Push the tag before running this workflow."
-            exit 1
-          fi
           sha="$(git rev-parse --short HEAD)"
-          echo "::notice::Building tag ${{ inputs.tag }} (${sha}) triggered by @${{ github.actor }}"
-          {
-            echo "### 🚀 Release ${{ inputs.tag }}"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| **Tag** | \`${{ inputs.tag }}\` |"
-            echo "| **Commit** | \`${sha}\` |"
-            echo "| **Triggered by** | @${{ github.actor }} |"
-            echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}\` |"
-            echo "| **Platforms** | linux/amd64, linux/arm64 |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Building tag ${{ inputs.tag }} (${sha}) for linux/${{ matrix.arch }} triggered by @${{ github.actor }}"
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # Embeds the version into the binary via Dockerfile `ARG release` -> make RELEASE=...
+          build-args: |
+            release=${{ inputs.tag }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max,ignore-error=true
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Push multi-arch manifest
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -86,23 +138,33 @@ jobs:
             type=raw,value=${{ inputs.tag }}
             type=raw,value=latest,enable=${{ !contains(inputs.tag, '-') }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          # Embeds the version into the binary via Dockerfile `ARG release` -> make RELEASE=...
-          build-args: |
-            release=${{ inputs.tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME}"
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          sources=()
+          for digest in *; do sources+=("${image}@sha256:${digest}"); done
+          docker buildx imagetools create $tags "${sources[@]}"
+
+      - name: Inspect image & write summary
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME}:${{ inputs.tag }}"
+          docker buildx imagetools inspect "$image"
+          {
+            echo "### 🚀 Release ${{ inputs.tag }}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| **Tag** | \`${{ inputs.tag }}\` |"
+            echo "| **Triggered by** | @${{ github.actor }} |"
+            echo "| **Image** | \`${image}\` |"
+            echo "| **Platforms** | linux/amd64, linux/arm64 (native runners) |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: Create GitHub Release
-    needs: [docker]
+    needs: [merge]
     runs-on: ubuntu-latest
     steps:
       - name: Create release
