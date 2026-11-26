@@ -163,6 +163,8 @@ type Config struct {
 		RefreshInterval time.Duration    `yaml:"refreshInterval" envconfig:"MEVINDEXER_REFRESH_INTERVAL"`
 	} `yaml:"mevIndexer"`
 
+	Xatu XatuConfig `yaml:"xatu"`
+
 	ExecutionIndexer struct {
 		Enabled         bool          `yaml:"enabled" envconfig:"EXECUTIONINDEXER_ENABLED"`
 		ParallelBlocks  int           `yaml:"parallelBlocks" envconfig:"EXECUTIONINDEXER_PARALLEL_BLOCKS"`
@@ -195,6 +197,15 @@ type Config struct {
 		Engine string              `yaml:"engine" envconfig:"BLOCKDB_ENGINE"`
 		Pebble PebbleBlockDBConfig `yaml:"pebble"`
 		S3     S3BlockDBConfig     `yaml:"s3"`
+
+		// ParallelLoadDelay controls how a block that is not in the indexer cache is
+		// fetched. The beacon nodes are asked first; once this delay has passed
+		// without a result, the same block is requested from the block db in
+		// parallel and whichever answer arrives first is used. 0s starts both loads
+		// at once, a negative value or an explicit null keeps the sequential
+		// node-then-block-db order. Defaults to 5s. (yaml needs a duration string
+		// such as "0s"; a bare 0 does not parse into a time.Duration.)
+		ParallelLoadDelay *time.Duration `yaml:"parallelLoadDelay" envconfig:"BLOCKDB_PARALLEL_LOAD_DELAY"`
 	} `yaml:"blockDb"`
 
 	KillSwitch struct {
@@ -217,19 +228,30 @@ type Config struct {
 	} `yaml:"rpcProxy"`
 
 	// EnsResolver optionally resolves execution addresses to their primary ENS name.
-	// ENS lives on Ethereum mainnet, so Endpoints usually point at a mainnet RPC; when
-	// empty the resolver falls back to an available client from the main execution pool.
+	// Names are resolved on the local network (the chain this explorer indexes, via
+	// the main execution pool) and on every configured remote network (each with its
+	// own RPC endpoints), so e.g. a devnet explorer can show mainnet ENS names.
 	EnsResolver struct {
-		Enabled           bool             `yaml:"enabled" envconfig:"ENSRESOLVER_ENABLED"`
-		Endpoints         []EndpointConfig `yaml:"endpoints"`
-		RegistryAddresses []string         `yaml:"registryAddresses" envconfig:"ENSRESOLVER_REGISTRY_ADDRESSES"` // tried in config order; first verified name wins
-		MulticallAddress  string           `yaml:"multicallAddress" envconfig:"ENSRESOLVER_MULTICALL_ADDRESS"`   // used to batch lookups when deployed
-		RefreshPositive   time.Duration    `yaml:"refreshPositive" envconfig:"ENSRESOLVER_REFRESH_POSITIVE"`     // re-resolve interval for addresses with a name
-		RefreshNegative   time.Duration    `yaml:"refreshNegative" envconfig:"ENSRESOLVER_REFRESH_NEGATIVE"`     // re-resolve interval for addresses without a name
-		BatchSize         int              `yaml:"batchSize" envconfig:"ENSRESOLVER_BATCH_SIZE"`
-		QueueSize         int              `yaml:"queueSize" envconfig:"ENSRESOLVER_QUEUE_SIZE"`
-		CacheSize         int              `yaml:"cacheSize" envconfig:"ENSRESOLVER_CACHE_SIZE"`
+		Enabled           bool               `yaml:"enabled" envconfig:"ENSRESOLVER_ENABLED"`
+		RegistryAddresses []string           `yaml:"registryAddresses" envconfig:"ENSRESOLVER_REGISTRY_ADDRESSES"` // local-network registries; tried in config order, first verified name wins
+		MulticallAddress  string             `yaml:"multicallAddress" envconfig:"ENSRESOLVER_MULTICALL_ADDRESS"`   // local-network multicall; used to batch lookups when deployed
+		RemoteNetworks    []EnsRemoteNetwork `yaml:"remoteNetworks"`                                               // additional networks to resolve names on
+		RefreshPositive   time.Duration      `yaml:"refreshPositive" envconfig:"ENSRESOLVER_REFRESH_POSITIVE"`     // re-resolve interval for addresses with a name
+		RefreshNegative   time.Duration      `yaml:"refreshNegative" envconfig:"ENSRESOLVER_REFRESH_NEGATIVE"`     // re-resolve interval for addresses without a name
+		BatchSize         int                `yaml:"batchSize" envconfig:"ENSRESOLVER_BATCH_SIZE"`
+		QueueSize         int                `yaml:"queueSize" envconfig:"ENSRESOLVER_QUEUE_SIZE"`
+		CacheSize         int                `yaml:"cacheSize" envconfig:"ENSRESOLVER_CACHE_SIZE"`
 	} `yaml:"ensResolver"`
+}
+
+// EnsRemoteNetwork configures ENS resolution on an additional network reachable via
+// dedicated RPC endpoints (e.g. Ethereum mainnet on a devnet explorer). Registry and
+// multicall addresses fall back to the top-level EnsResolver settings when empty.
+type EnsRemoteNetwork struct {
+	Name              string           `yaml:"name"`
+	Endpoints         []EndpointConfig `yaml:"endpoints"`
+	RegistryAddresses []string         `yaml:"registryAddresses"`
+	MulticallAddress  string           `yaml:"multicallAddress"`
 }
 
 type EndpointConfig struct {
@@ -267,6 +289,49 @@ type MevRelayConfig struct {
 	Name       string `yaml:"name"`
 	Url        string `yaml:"url"`
 	BlockLimit int    `yaml:"blockLimit"`
+}
+
+// XatuConfig configures the optional Xatu ClickHouse data source.
+type XatuConfig struct {
+	Enabled bool `yaml:"enabled" envconfig:"XATU_ENABLED"`
+	// NetworkName filters rows by meta_network_name; defaults to the chain name.
+	NetworkName string `yaml:"networkName" envconfig:"XATU_NETWORK_NAME"`
+	// SettleDelay is how long after slot start the ingest pipeline is assumed to
+	// still be receiving events. Responses for younger slots are cached for one
+	// slot only, rather than not at all, so repeat views cannot each re-query.
+	SettleDelay      time.Duration `yaml:"settleDelay" envconfig:"XATU_SETTLE_DELAY"`
+	ConcurrencyLimit int           `yaml:"concurrencyLimit" envconfig:"XATU_CONCURRENCY_LIMIT"`
+	// Raw holds the connection to xatu's raw event tables. xatu-cbt's
+	// transformed models live on a different cluster, so a cbt source slots in
+	// alongside this one rather than sharing its connection.
+	Raw XatuSourceConfig `yaml:"raw"`
+	// Cbt holds the connection to the xatu-cbt transformed models. Optional;
+	// features backed by cbt tables stay hidden when no DSN is set.
+	Cbt XatuCbtSourceConfig `yaml:"cbt"`
+}
+
+// XatuSourceConfig is the connection to one ClickHouse instance holding xatu
+// data.
+type XatuSourceConfig struct {
+	// ClickhouseDsn is the ClickHouse endpoint, e.g. "https://user:pass@clickhouse.example.com"
+	// (HTTP protocol) or "clickhouse://user:pass@host:9000" (native protocol).
+	ClickhouseDsn string `yaml:"clickhouseDsn" envconfig:"XATU_RAW_CLICKHOUSE_DSN"`
+	// ClickhouseCachedDsn optionally points at a response-caching proxy (e.g. chproxy).
+	// Queries for settled slots are routed here so identical queries across
+	// instances and page loads share one cached response.
+	ClickhouseCachedDsn string `yaml:"clickhouseCachedDsn" envconfig:"XATU_RAW_CLICKHOUSE_CACHED_DSN"`
+	Database            string `yaml:"database" envconfig:"XATU_RAW_DATABASE"`
+}
+
+// XatuCbtSourceConfig is the connection to a ClickHouse instance holding
+// xatu-cbt transformed models. It mirrors XatuSourceConfig; the envconfig tags
+// carry the source name, so each source needs its own struct.
+type XatuCbtSourceConfig struct {
+	ClickhouseDsn       string `yaml:"clickhouseDsn" envconfig:"XATU_CBT_CLICKHOUSE_DSN"`
+	ClickhouseCachedDsn string `yaml:"clickhouseCachedDsn" envconfig:"XATU_CBT_CLICKHOUSE_CACHED_DSN"`
+	// Database names the per-network database holding the cbt models; defaults
+	// to the network name.
+	Database string `yaml:"database" envconfig:"XATU_CBT_DATABASE"`
 }
 
 type DatabaseConfig struct {
@@ -325,6 +390,10 @@ type PebbleBlockDBConfig struct {
 	BlockRetention    BlockDbRetentionConfig `yaml:"blockRetention"`
 	ExecDataRetention BlockDbRetentionConfig `yaml:"execDataRetention"`
 	DutiesRetention   BlockDbRetentionConfig `yaml:"dutiesRetention"`
+	// BidsRetention governs per-slot meta objects (bids and inclusion lists
+	// with their gossip observations).
+	// Only applies in pebble mode - in tiered mode meta objects live in S3 only.
+	BidsRetention BlockDbRetentionConfig `yaml:"bidsRetention"`
 
 	// Interval between retention cleanup runs (default 12h, negative = disabled).
 	CleanupInterval time.Duration `yaml:"cleanupInterval" envconfig:"BLOCKDB_PEBBLE_CLEANUP_INTERVAL"`

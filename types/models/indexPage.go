@@ -52,7 +52,7 @@ type IndexPageDataForks struct {
 	Version          []byte  `json:"version" ssz-size:"4"`
 	Active           bool    `json:"active"`
 	Time             uint64  `json:"time"`
-	Type             string  `json:"type"`                                              // "consensus" or "bpo"
+	Type             string  `json:"type"`                                              // "consensus", "bpo" or "execution" (EL-only)
 	MaxBlobsPerBlock *uint64 `json:"max_blobs_per_block,omitempty" ssz-type:"optional"` // Only for BPO forks
 	ForkDigest       []byte  `json:"fork_digest" ssz-size:"4"`                          // Fork digest for this fork
 }
@@ -85,6 +85,7 @@ type IndexPageDataBlocks struct {
 	PayloadStatus uint8     `json:"payload_status"`
 	HasBuilder    bool      `json:"has_builder"`
 	BuilderIndex  uint64    `json:"builder_index"`
+	BuilderName   string    `json:"builder_name"`
 	BuilderURL    string    `json:"builder_url"`
 	BlockRoot     []byte    `json:"block_root" ssz-size:"32"`
 }
@@ -100,6 +101,7 @@ type IndexPageDataSlots struct {
 	PayloadStatus uint8                     `json:"payload_status"`
 	HasBuilder    bool                      `json:"has_builder"`
 	BuilderIndex  uint64                    `json:"builder_index"`
+	BuilderName   string                    `json:"builder_name"`
 	BuilderURL    string                    `json:"builder_url"`
 	Safe          bool                      `json:"safe"`
 	BlockRoot     []byte                    `json:"block_root" ssz-size:"32"`

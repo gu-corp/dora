@@ -536,6 +536,42 @@ func ensAddrHook(fullAddr string) string {
 	return fmt.Sprintf(`class="ens-addr" data-address="%s"`, strings.ToLower(fullAddr))
 }
 
+// FormatEthAddressLinkBase returns the href prefix that client-side rendered
+// address links put in front of the 0x-address so they point where
+// FormatEthAddressLink links to. Empty when addresses are not linked at all.
+func FormatEthAddressLinkBase() string {
+	if Config.ExecutionIndexer.Enabled {
+		return "/address/"
+	}
+
+	if Config.Frontend.EthExplorerLink != "" {
+		link, err := url.JoinPath(Config.Frontend.EthExplorerLink, "address")
+		if err == nil {
+			return link + "/"
+		}
+	}
+
+	return ""
+}
+
+// FormatEthTransactionLinkBase returns the href prefix that client-side rendered
+// transaction links put in front of the 0x-hash so they point where
+// FormatEthTransactionLink links to. Empty when transactions are not linked at all.
+func FormatEthTransactionLinkBase() string {
+	if Config.ExecutionIndexer.Enabled {
+		return "/tx/"
+	}
+
+	if Config.Frontend.EthExplorerLink != "" {
+		link, err := url.JoinPath(Config.Frontend.EthExplorerLink, "tx")
+		if err == nil {
+			return link + "/"
+		}
+	}
+
+	return ""
+}
+
 func FormatEthAddressLink(address []byte) template.HTML {
 	if len(address) == 0 {
 		return template.HTML("")
@@ -913,7 +949,7 @@ func formatValidator(index uint64, name string, icon string, withIndex bool) tem
 //
 // Scheduled/missing slots (status == 0) and unknown proposers have no
 // determinable build source and are rendered without any leading icon.
-func FormatProposerWithBuildSource(status uint8, index uint64, name string, hasBuilder bool, builderIndex uint64, builderURL string) template.HTML {
+func FormatProposerWithBuildSource(status uint8, index uint64, name string, hasBuilder bool, builderIndex uint64, builderName string) template.HTML {
 	if status == 0 || index == math.MaxInt64 {
 		if index == math.MaxInt64 {
 			return template.HTML(`<span class="validator-label validator-index">unknown</span>`)
@@ -933,15 +969,9 @@ func FormatProposerWithBuildSource(status uint8, index uint64, name string, hasB
 		// self-built payload
 		iconHTML = `<i class="fas fa-house mr-2" data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="Self-built payload"></i>`
 	} else {
-		// builder-built payload - link the icon to the builder URL when known,
-		// otherwise to the internal builder page
-		builderLink := fmt.Sprintf("/builder/%v", builderIndex)
-		external := ""
-		if builderURL != "" {
-			builderLink = html.EscapeString(builderURL)
-			external = ` target="_blank" rel="noopener noreferrer"`
-		}
-		iconHTML = fmt.Sprintf(`<a href="%v"%v class="builder-source-link" data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="Builder-built payload (builder %v)"><i class="fas fa-hard-hat mr-2"></i></a>`, builderLink, external, builderIndex)
+		// builder-built payload - the icon links to the builder details page and
+		// names the builder in the tooltip when the buildoor inventory knows it
+		iconHTML = fmt.Sprintf(`<a href="/builder/%v" class="builder-source-link" data-bs-toggle="tooltip" data-bs-placement="top" data-bs-title="Builder-built payload by %v"><i class="fas fa-hard-hat mr-2"></i></a>`, builderIndex, html.EscapeString(builderTooltipLabel(builderIndex, builderName)))
 	}
 
 	nameLabel := fmt.Sprintf("%v", index)
@@ -951,6 +981,15 @@ func FormatProposerWithBuildSource(status uint8, index uint64, name string, hasB
 		labelClass = "validator-name"
 	}
 	return template.HTML(fmt.Sprintf(`<span class="validator-label %v">%v <a href="/validator/%v">%v</a></span>`, labelClass, iconHTML, index, nameLabel))
+}
+
+// builderTooltipLabel renders "name (index)" when the builder has a known name and
+// "builder <index>" otherwise.
+func builderTooltipLabel(index uint64, name string) string {
+	if name != "" {
+		return fmt.Sprintf("%v (%v)", name, index)
+	}
+	return fmt.Sprintf("builder %v", index)
 }
 
 func FormatValidatorNameWithIndex(index uint64, name string) template.HTML {
@@ -989,11 +1028,11 @@ func formatBuilder(index uint64, name string, externalURL string, icon string, w
 		return template.HTML("<span class=\"builder-label builder-index\"><i class=\"fas fa-house mr-2\"></i> Self-built</span>")
 	}
 
-	// When the builder exposes an external URL, its "name" is often the full API URL, which is
-	// far too long for the table columns. Collapse it to the hyperlinked builder index and show
-	// the full API URL on hover instead of printing it inline.
+	// The label always links to the builder details page. When the buildoor inventory knows the
+	// instance's API URL it is shown on hover only, never printed inline or linked to.
+	tooltip := ""
 	if externalURL != "" {
-		return template.HTML(fmt.Sprintf("<span class=\"builder-label builder-index\"><i class=\"fas %v\"></i> <a href=\"/builder/%v\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-title=\"%v\">%v</a></span>", icon, index, html.EscapeString(externalURL), index))
+		tooltip = fmt.Sprintf(" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-title=\"%v\"", html.EscapeString(externalURL))
 	}
 
 	if name != "" {
@@ -1003,9 +1042,9 @@ func formatBuilder(index uint64, name string, externalURL string, icon string, w
 		} else {
 			nameLabel = html.EscapeString(name)
 		}
-		return template.HTML(fmt.Sprintf("<span class=\"builder-label builder-name\"><i class=\"fas %v\"></i> <a href=\"/builder/%v\">%v</a></span>", icon, index, nameLabel))
+		return template.HTML(fmt.Sprintf("<span class=\"builder-label builder-name\"><i class=\"fas %v\"></i> <a href=\"/builder/%v\"%v>%v</a></span>", icon, index, tooltip, nameLabel))
 	}
-	return template.HTML(fmt.Sprintf("<span class=\"builder-label builder-index\"><i class=\"fas %v\"></i> <a href=\"/builder/%v\">%v</a></span>", icon, index, index))
+	return template.HTML(fmt.Sprintf("<span class=\"builder-label builder-index\"><i class=\"fas %v\"></i> <a href=\"/builder/%v\"%v>%v</a></span>", icon, index, tooltip, index))
 }
 
 func FormatRecentTimeShort(ts time.Time) template.HTML {
@@ -1028,6 +1067,32 @@ func FormatRecentTimeShort(ts time.Time) template.HTML {
 	} else {
 		return template.HTML(fmt.Sprintf("in %v", timeStr))
 	}
+}
+
+// FormatArrivalMs renders a block arrival time colorized by speed. The
+// thresholds and colors are duplicated in timeColor() in
+// templates/slot/arrival.html, which colors the same values client side;
+// change both together.
+func FormatArrivalMs(ms uint32) template.HTML {
+	color := "#f46a6a"
+
+	switch {
+	case ms < 1000:
+		color = "#34c38f"
+	case ms < 2000:
+		color = "#7bc96f"
+	case ms < 3000:
+		color = "#f1b44c"
+	case ms < 4000:
+		color = "#f0824c"
+	}
+
+	value := fmt.Sprintf("%dms", ms)
+	if ms >= 1000 {
+		value = fmt.Sprintf("%.2fs", float64(ms)/1000)
+	}
+
+	return template.HTML(fmt.Sprintf("<span style=%q>%s</span>", "color: "+color, value))
 }
 
 func FormatGraffiti(graffiti []byte) template.HTML {

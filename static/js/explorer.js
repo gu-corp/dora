@@ -38,6 +38,7 @@
     serverNow: serverNow,
     updateServerTime: updateServerTime,
     ensNameFor: ensNameFor,
+    ensEntriesFor: ensEntriesFor,
     applyEnsToNode: applyEnsToNode,
   };
 
@@ -61,21 +62,36 @@
     });
   }
 
-  // ensNamesMap holds the merged address->name lookup from every `.ens-names` JSON block
-  // in the DOM (the layout carries one; lazy-loaded fragments carry their own).
+  // ensNamesMap holds the merged address->entries lookup from every `.ens-names` JSON
+  // block in the DOM (the layout carries one; lazy-loaded fragments carry their own).
+  // Each entry is a list of {name, network, local} objects in display order (local
+  // network first). Plain-string values (from stale cached page fragments using the
+  // old single-name format) are normalized into the list form.
   var ensNamesMap = {};
   function refreshEnsNamesMap() {
     document.querySelectorAll('script.ens-names').forEach(function(blob) {
       try {
         var parsed = JSON.parse(blob.textContent || '{}');
         if (parsed && typeof parsed === 'object') {
-          for (var key in parsed) ensNamesMap[key.toLowerCase()] = parsed[key];
+          for (var key in parsed) {
+            var value = parsed[key];
+            if (typeof value === 'string') {
+              value = value ? [{ name: value, network: '', local: true }] : [];
+            }
+            if (Array.isArray(value) && value.length > 0) {
+              ensNamesMap[key.toLowerCase()] = value;
+            }
+          }
         }
       } catch (e) { /* ignore malformed block */ }
     });
   }
-  function ensNameFor(address) {
+  function ensEntriesFor(address) {
     return address ? (ensNamesMap[String(address).toLowerCase()] || null) : null;
+  }
+  function ensNameFor(address) {
+    var entries = ensEntriesFor(address);
+    return entries && entries.length > 0 ? entries[0].name : null;
   }
 
   // setEnsTooltip sets a node's tooltip to "<name><br><address>" using Bootstrap's
@@ -96,16 +112,40 @@
     node.setAttribute('data-bs-title', escapeHtml(name) + '<br>' + String(addr).toLowerCase());
   }
 
-  // applyEnsToNode swaps a single element's text for the ENS name of `address` (if any),
-  // adding the ellipsis class and a full-name+address tooltip. Copy/href stay untouched.
-  // Returns true when a name was applied. Used for client-rendered callouts.
+  // attachEnsIcon inserts the clickable ENS icon (tag = resolved on the local network,
+  // globe = resolved on a remote network) before a name-swapped node. Clicking it opens
+  // the ENS callout with the raw address and all resolved names. A stale icon from a
+  // previous swap (reused nodes in client-rendered callouts) is replaced.
+  function attachEnsIcon(node, address, entries) {
+    if (!node.parentNode) return;
+    var prev = node.previousElementSibling;
+    if (prev && prev.classList.contains('ens-icon')) {
+      if (prev.getAttribute('data-ens-address') === address) return;
+      var stalePopover = bootstrap.Popover.getInstance(prev);
+      if (stalePopover) stalePopover.dispose();
+      prev.remove();
+    }
+    var icon = document.createElement('span');
+    icon.className = 'ens-icon ' + (entries[0].local ? 'ens-icon-local' : 'ens-icon-remote');
+    icon.setAttribute('role', 'button');
+    icon.setAttribute('tabindex', '0');
+    icon.setAttribute('data-ens-address', address);
+    icon.innerHTML = '<i class="fas ' + (entries[0].local ? 'fa-tag' : 'fa-globe') + '"></i>';
+    node.parentNode.insertBefore(icon, node);
+  }
+
+  // applyEnsToNode swaps a single element's text for the primary ENS name of `address`
+  // (if any), adding the ellipsis class, a full-name+address tooltip and the callout
+  // icon. Copy/href stay untouched. Returns true when a name was applied. Used for
+  // client-rendered callouts.
   function applyEnsToNode(node, address) {
     if (!node) return false;
-    var name = ensNameFor(address);
-    if (!name) return false;
-    node.textContent = name;
+    var entries = ensEntriesFor(address);
+    if (!entries) return false;
+    node.textContent = entries[0].name;
     node.classList.add('ens-name');
-    setEnsTooltip(node, name, address);
+    setEnsTooltip(node, entries[0].name, address);
+    attachEnsIcon(node, String(address).toLowerCase(), entries);
     return true;
   }
 
@@ -120,14 +160,67 @@
     document.querySelectorAll('.ens-addr[data-address]').forEach(function(node) {
       if (node.getAttribute('data-ens-applied')) return;
       var addr = (node.getAttribute('data-address') || '').toLowerCase();
-      var name = ensNamesMap[addr];
-      if (!name) return;
-      node.textContent = name;
+      var entries = ensNamesMap[addr];
+      if (!entries) return;
+      node.textContent = entries[0].name;
       node.classList.add('ens-name');
-      setEnsTooltip(node, name, addr);
+      setEnsTooltip(node, entries[0].name, addr);
+      attachEnsIcon(node, addr, entries);
       node.setAttribute('data-ens-applied', '1');
     });
   }
+
+  // The ENS callout: a popover on the `.ens-icon` badge showing the raw address and
+  // every resolved name with its network, each copyable. One delegated listener covers
+  // JS-injected icons and server-rendered ones (address page); only one callout is open
+  // at a time and any outside click closes it.
+  var openEnsPopover = null;
+  function closeEnsPopover() {
+    if (!openEnsPopover) return;
+    try { openEnsPopover.hide(); } catch (e) { /* element may be gone */ }
+    openEnsPopover = null;
+  }
+  function buildEnsCalloutContent(address) {
+    var copyIcon = function(text) {
+      return '<i class="fa fa-copy text-muted p-1" role="button" data-bs-toggle="tooltip" title="Copy to clipboard" data-clipboard-text="' + escapeHtml(text) + '"></i>';
+    };
+    var rows = ['<div class="ens-callout-row"><span class="ens-callout-value">' + escapeHtml(address) + '</span>' + copyIcon(address) + '</div>'];
+    (ensEntriesFor(address) || []).forEach(function(entry) {
+      rows.push('<div class="ens-callout-row"><span class="ens-callout-value">' + escapeHtml(entry.name) + '</span>' +
+        '<span class="badge rounded-pill ' + (entry.local ? 'text-bg-primary' : 'text-bg-secondary') + '">' + escapeHtml(entry.network || 'local') + '</span>' +
+        copyIcon(entry.name) + '</div>');
+    });
+    return rows.join('');
+  }
+  document.addEventListener('click', function(ev) {
+    var icon = ev.target.closest ? ev.target.closest('.ens-icon[data-ens-address]') : null;
+    if (!icon) {
+      if (openEnsPopover && !(ev.target.closest && ev.target.closest('.ens-callout-popover'))) closeEnsPopover();
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    var popover = bootstrap.Popover.getOrCreateInstance(icon, {
+      html: true,
+      title: 'ENS Names',
+      content: ' ',
+      trigger: 'manual',
+      container: 'body',
+      customClass: 'ens-callout-popover',
+    });
+    if (openEnsPopover === popover) {
+      closeEnsPopover();
+      return;
+    }
+    closeEnsPopover();
+    popover.show();
+    var body = popover.tip && popover.tip.querySelector('.popover-body');
+    if (body) {
+      body.innerHTML = buildEnsCalloutContent((icon.getAttribute('data-ens-address') || '').toLowerCase());
+      initControls();
+    }
+    openEnsPopover = popover;
+  });
 
   function initControls() {
     // swap addresses for ENS names before tooltips are initialized
@@ -159,9 +252,12 @@
     });
   }
 
-  // initAddrHighlight highlights all equal address links within the hovered
-  // scope (an EL data table or the internal-tx tree). Uses event delegation so
-  // it also covers rows/nodes that are loaded lazily after page load.
+  // initAddrHighlight highlights every link to the address being hovered, so the same
+  // account can be followed through a page that mentions it in several places - the
+  // frames of a transaction, its state changes, the row it came from. It prefers the
+  // nearest list (an EL data table or the internal-tx tree) and otherwise takes the
+  // whole page, since an address that appears twice on a page is the same account
+  // wherever it appears. Uses event delegation so lazily loaded content is covered.
   function initAddrHighlight() {
     var current = null;
     function clear() {
@@ -172,8 +268,7 @@
     document.addEventListener('mouseover', function(ev) {
       var a = ev.target.closest ? ev.target.closest('a[href^="/address/0x"]') : null;
       if (!a) { return; }
-      var scope = a.closest('.el-data-table, .itx-wrap');
-      if (!scope) { return; }
+      var scope = a.closest('.el-data-table, .itx-wrap') || document.body;
       var href = a.getAttribute('href');
       if (href === current) { return; }
       clear();
@@ -368,6 +463,7 @@
     var searchEl = jQuery("#explorer-search");
     let requestNum = 9
     var executionIndexerEnabled = searchEl.data("execution-indexer-enabled") === true || searchEl.attr("data-execution-indexer-enabled") === "true" || searchEl.data("executionIndexerEnabled") === true;
+    var ensSearchEnabled = searchEl.data("ens-search-enabled") === true || searchEl.attr("data-ens-search-enabled") === "true" || searchEl.data("ensSearchEnabled") === true;
 
     var prepareQueryFn = function(query, settings) {
       settings.url += encodeURIComponent(query);
@@ -469,6 +565,23 @@
         },
         remote: {
           url: "/search/transactions?q=",
+          prepare: prepareQueryFn,
+          maxPendingRequests: requestNum,
+        },
+      });
+    }
+
+    var bhEnsNames = null;
+    if (ensSearchEnabled) {
+      bhEnsNames = new Bloodhound({
+        datumTokenizer: Bloodhound.tokenizers.whitespace,
+        queryTokenizer: Bloodhound.tokenizers.whitespace,
+        identify: function (obj) {
+          // the same name can resolve on multiple networks
+          return obj.ens_name + "@" + obj.network
+        },
+        remote: {
+          url: "/search/ens?q=",
           prepare: prepareQueryFn,
           maxPendingRequests: requestNum,
         },
@@ -590,11 +703,34 @@
           header: '<h3 class="h5">Transactions:</h3>',
           suggestion: function (data) {
             var status = "";
-            if (data.reverted) {
+            if (data.frame_incomplete) {
+              status = `<span class="search-cell"><span class="badge rounded-pill text-bg-warning text-dark">Complete</span></span>`;
+            } else if (data.reverted) {
               status = `<span class="search-cell"><span class="badge rounded-pill text-bg-danger">Failed</span></span>`;
             }
             var blockInfo = data.block_number ? `<span class="search-cell text-muted">Block ${data.block_number}</span>` : "";
             return `<div class="text-monospace"><div class="search-table"><span class="search-cell search-truncate">${data.tx_hash}</span>${blockInfo}${status}</div></div>`;
+          },
+        },
+      });
+    }
+
+    // Add ENS dataset conditionally
+    if (ensSearchEnabled && bhEnsNames) {
+      datasets.push({
+        limit: 5,
+        name: "ens",
+        source: bhEnsNames,
+        display: "ens_name",
+        templates: {
+          header: '<h3 class="h5">ENS Names:</h3>',
+          suggestion: function (data) {
+            // ens_name is server-side html-escaped; network is a trusted config value
+            var badges = `<span class="search-cell"><span class="badge rounded-pill ${data.local ? "text-bg-primary" : "text-bg-secondary"}">${data.network}</span></span>`;
+            if (data.is_contract) {
+              badges += `<span class="search-cell"><span class="badge rounded-pill text-bg-warning">Contract</span></span>`;
+            }
+            return `<div class="text-monospace"><div class="search-table"><span class="search-cell">${data.ens_name}</span><span class="search-cell search-truncate text-muted">${data.address}</span>${badges}</div></div>`;
           },
         },
       });
@@ -638,6 +774,8 @@
         window.location = "/slots/filtered?f&f.orphaned=1&f.graffiti=" + encodeURIComponent(el.value)
       } else if (sug.pubkey !== undefined) {
         window.location = "/validator/" + sug.index
+      } else if (sug.ens_name !== undefined) {
+        window.location = "/address/" + sug.address
       } else if (sug.name !== undefined) {
           // sug.name is html-escaped to prevent xss, we need to unescape it
           var el = document.createElement("textarea")

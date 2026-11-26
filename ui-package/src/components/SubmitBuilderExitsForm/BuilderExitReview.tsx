@@ -4,6 +4,7 @@ import { Modal } from 'react-bootstrap';
 
 import { toReadableAmount } from '../../utils/ReadableAmount';
 import { useQueueDataCache } from '../../hooks/useQueueDataCache';
+import { BUILDER_EXIT_REQUEST_GAS_LIMIT } from '../../utils/GasLimits';
 
 interface IBuilderExitReviewProps {
   pubkey: string;
@@ -41,7 +42,14 @@ const BuilderExitReview = (props: IBuilderExitReviewProps) => {
       if (queueLength === 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn) {
         isPreFork = true;
       } else {
-        requiredFee = getRequiredFee(queueLength);
+        // Unlike EIP-7002/7251, the EIP-8282 contract charges fees per write path: the fee
+        // numerator is the excess (slot 0) plus the requests already added in the current
+        // block (slot 1) beyond TARGET_PER_BLOCK (2 for the builder exit contract).
+        let feeNumerator = queueLength;
+        if (queueData.blockCount > 2n) {
+          feeNumerator += queueData.blockCount - 2n;
+        }
+        requiredFee = getRequiredFee(feeNumerator);
 
         if (addExtraFee && cachedLogData) {
           for (let block in cachedLogData.logCount) {
@@ -56,7 +64,7 @@ const BuilderExitReview = (props: IBuilderExitReviewProps) => {
             extraFeeForRequest++;
           }
 
-          requestFee = getRequiredFee(queueLength + BigInt(Math.ceil(extraFeeForRequest)));
+          requestFee = getRequiredFee(feeNumerator + BigInt(Math.ceil(extraFeeForRequest)));
         } else {
           requestFee = requiredFee;
         }
@@ -192,7 +200,7 @@ const BuilderExitReview = (props: IBuilderExitReviewProps) => {
       value: requestFee,
       // calldata (48 bytes): builder pubkey. source_address = msg.sender.
       data: ("0x" + props.pubkey.replace(/^0x/, "")) as `0x${string}`,
-      gas: 200000n,
+      gas: BUILDER_EXIT_REQUEST_GAS_LIMIT,
     }).then(tx => {
       console.log(tx);
     }).catch(error => {

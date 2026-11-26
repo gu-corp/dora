@@ -6,10 +6,11 @@ import (
 
 // AddressPageData is a struct to hold info for the address page
 type AddressPageData struct {
-	Address            []byte `json:"address"`
-	AddressEnsName     string `json:"address_ens_name"` // resolved primary ENS name for this address (empty if none)
-	AccountID          uint64 `json:"account_id"`
-	IsContract         bool   `json:"is_contract"`
+	Address            []byte         `json:"address"`
+	AddressEnsName     string         `json:"address_ens_name"`  // primary (display) ENS name for this address (empty if none)
+	AddressEnsNames    []EnsNameEntry `json:"address_ens_names"` // all resolved ENS names for this address across networks
+	AccountID          uint64         `json:"account_id"`
+	IsContract         bool           `json:"is_contract"`
 	DataRange          *ElDataRangeInfo
 	IsToken            bool   `json:"is_token"`
 	TokenName          string `json:"token_name"`
@@ -103,15 +104,18 @@ type AddressPageDataTransaction struct {
 	ToID           uint64    `json:"to_id"`
 	ToIsContract   bool      `json:"to_is_contract"`
 	HasTo          bool      `json:"has_to"` // false for contract creation
-	IsOutgoing     bool      `json:"is_outgoing"`
-	Nonce          uint64    `json:"nonce"`
-	Amount         float64   `json:"amount"`
-	AmountRaw      []byte    `json:"amount_raw"`
-	TxFee          float64   `json:"tx_fee"` // Transaction fee in ETH
-	Reverted       bool      `json:"reverted"`
-	RevertReason   string    `json:"revert_reason,omitempty"`
-	MethodID       []byte    `json:"method_id"`
-	MethodName     string    `json:"method_name"`
+	// IsMultiTarget marks a transaction that addresses several recipients rather than
+	// one, so a missing recipient is not a contract creation.
+	IsMultiTarget bool    `json:"is_multi_target"`
+	IsOutgoing    bool    `json:"is_outgoing"`
+	Nonce         uint64  `json:"nonce"`
+	Amount        float64 `json:"amount"`
+	AmountRaw     []byte  `json:"amount_raw"`
+	TxFee         float64 `json:"tx_fee"` // Transaction fee in ETH
+	Reverted      bool    `json:"reverted"`
+	RevertReason  string  `json:"revert_reason,omitempty"`
+	MethodID      []byte  `json:"method_id"`
+	MethodName    string  `json:"method_name"`
 }
 
 // AddressPageDataTokenTransfer represents a token transfer

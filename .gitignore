@@ -12,4 +12,7 @@ tmp-*
 .hack/devnet/custom-**
 
 cmd/statetransition-test/
+ai_plans/
 
+# consensus-spec-tests vectors fetched by .github/scripts/fetch-spec-tests.sh
+/.spec-tests/

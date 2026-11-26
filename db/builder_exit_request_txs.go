@@ -9,7 +9,19 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+// builderExitTxFieldCount is the number of columns written per row; it must match the column list
+// below and is what bounds the chunk size in InsertBuilderExitTxs.
+const builderExitTxFieldCount = 12
+
 func InsertBuilderExitTxs(ctx context.Context, tx *sqlx.Tx, exitTxs []*dbtypes.BuilderExitTx) error {
+	return insertChunks(exitTxs, builderExitTxFieldCount, func(chunk []*dbtypes.BuilderExitTx) error {
+		return insertBuilderExitTxsChunk(ctx, tx, chunk)
+	})
+}
+
+// insertBuilderExitTxsChunk inserts a single statement worth of rows; callers must go through
+// InsertBuilderExitTxs so the bind-parameter limit is respected.
+func insertBuilderExitTxsChunk(ctx context.Context, tx *sqlx.Tx, exitTxs []*dbtypes.BuilderExitTx) error {
 	var sql strings.Builder
 	fmt.Fprint(&sql,
 		EngineQuery(map[dbtypes.DBEngineType]string{
@@ -20,7 +32,7 @@ func InsertBuilderExitTxs(ctx context.Context, tx *sqlx.Tx, exitTxs []*dbtypes.B
 		" VALUES ",
 	)
 	argIdx := 0
-	fieldCount := 12
+	fieldCount := builderExitTxFieldCount
 
 	args := make([]any, len(exitTxs)*fieldCount)
 	for i, exitTx := range exitTxs {
@@ -78,6 +90,34 @@ func GetBuilderExitTxsByDequeueRange(ctx context.Context, dequeueFirst uint64, d
 	return exitTxs
 }
 
+// GetBuilderExitTxsUpToBlock returns all builder exit request txs up to the given el block
+// number, in queue (block number, log index) order.
+func GetBuilderExitTxsUpToBlock(ctx context.Context, maxBlockNumber uint64) []*dbtypes.BuilderExitTx {
+	exitTxs := []*dbtypes.BuilderExitTx{}
+
+	err := ReaderDb.SelectContext(ctx, &exitTxs, `SELECT builder_exit_request_txs.*
+		FROM builder_exit_request_txs
+		WHERE block_number <= $1
+		ORDER BY block_number ASC, block_index ASC
+	`, maxBlockNumber)
+	if err != nil {
+		logger.Errorf("Error while fetching builder exit txs: %v", err)
+		return nil
+	}
+
+	return exitTxs
+}
+
+// UpdateBuilderExitTxDequeueBlock updates the dequeue block of a builder exit request tx.
+func UpdateBuilderExitTxDequeueBlock(ctx context.Context, tx *sqlx.Tx, blockRoot []byte, blockIndex uint64, dequeueBlock uint64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE builder_exit_request_txs
+		SET dequeue_block = $1
+		WHERE block_root = $2 AND block_index = $3
+	`, dequeueBlock, blockRoot, blockIndex)
+
+	return err
+}
+
 func GetBuilderExitTxsByTxHashes(ctx context.Context, txHashes [][]byte) []*dbtypes.BuilderExitTx {
 	var sql strings.Builder
 	args := make([]any, len(txHashes))
@@ -115,8 +155,9 @@ func GetBuilderExitTxsFiltered(ctx context.Context, offset uint64, limit uint32,
 
 	filterOp := "WHERE"
 	if filter.MinDequeue > 0 {
+		// dequeue block 0 = queued before dequeue activation, not determinable yet - still pending
 		args = append(args, filter.MinDequeue)
-		fmt.Fprintf(&sql, " %v dequeue_block >= $%v", filterOp, len(args))
+		fmt.Fprintf(&sql, " %v (dequeue_block >= $%v OR dequeue_block = 0)", filterOp, len(args))
 		filterOp = "AND"
 	}
 	if filter.MaxDequeue > 0 {

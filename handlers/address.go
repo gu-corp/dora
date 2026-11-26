@@ -330,8 +330,11 @@ func buildAddressPageData(ctx context.Context, addressBytes []byte, tabView stri
 	ensNames := resolveEnsNames(ctx, ensAddrs)
 	pageData.SetEnsNames(ensNames)
 	// The page's own address is rendered full (not as a swappable link), so surface its
-	// name explicitly for the header to show alongside the address.
-	pageData.AddressEnsName = ensNames[strings.ToLower(common.BytesToAddress(pageData.Address).Hex())]
+	// names explicitly for the header/info rows to show alongside the address.
+	pageData.AddressEnsNames = ensNames[strings.ToLower(common.BytesToAddress(pageData.Address).Hex())]
+	if len(pageData.AddressEnsNames) > 0 {
+		pageData.AddressEnsName = pageData.AddressEnsNames[0].Name
+	}
 
 	return pageData, 2 * time.Minute
 }
@@ -516,8 +519,11 @@ func loadTransactionsTab(ctx context.Context, pageData *models.AddressPageData, 
 				txData.HasTo = true
 			}
 		}
-		// Deployment is flagged on tx_type at index time (raw recipient was null).
-		isCreate := tx.TxType&dbtypes.ElTxFlagCreate != 0
+		// Deployment is flagged on tx_type at index time (raw recipient was null). A
+		// transaction that addresses several recipients has none of its own and is not
+		// one, however much a missing recipient looks like it.
+		txData.IsMultiTarget = dbtypes.IsMultiTarget(tx.TxType)
+		isCreate := !txData.IsMultiTarget && tx.TxType&dbtypes.ElTxFlagCreate != 0
 
 		// Extract method ID from stored method_id field (first 4 bytes only)
 		if len(tx.MethodID) >= 4 {
@@ -972,6 +978,7 @@ var callTypeBitNames = []string{
 	"CREATE",       // 3
 	"CREATE2",      // 4
 	"SELFDESTRUCT", // 5
+	"FRAME",        // 6 - a consensus frame of an EIP-8141 transaction, not a traced call
 }
 
 func expandCallTypeMask(mask uint16) []models.AddressPageDataInternalTransactionCallType {

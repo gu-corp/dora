@@ -63,11 +63,21 @@ type CallTracerConfig struct {
 // CallTraceResult is the JSON result for one transaction from
 // debug_traceBlockByHash with the callTracer.
 type CallTraceResult struct {
-	TxHash common.Hash    `json:"txHash"`
-	Result *CallTraceCall `json:"result"`
+	TxHash common.Hash
+
+	// Roots are the transaction's top-level call frames.
+	//
+	// An ordinary transaction is a single call and has exactly one. An EIP-8141 frame
+	// transaction is a list of calls, so a client that decomposes one reports a root per
+	// frame; the callTracer is not part of execution-apis and nothing specifies how, so
+	// both a lone object and a list are accepted here.
+	Roots []*CallTraceCall
 }
 
 // CallTraceCall is a single call frame in the callTracer output.
+//
+// Input, Output and RevertReason are pruned while the response is read, see
+// decodeCallTraceResults, so they hold at most the payload limit plus one byte.
 type CallTraceCall struct {
 	Type    string          `json:"type"`
 	From    common.Address  `json:"from"`
@@ -82,6 +92,29 @@ type CallTraceCall struct {
 
 	// Revert reason (some clients include this separately)
 	RevertReason LenientHexBytes `json:"revertReason,omitempty"`
+
+	// EIP-8037 splits gas into a regular and a state dimension. Clients on such a chain
+	// report both alongside gasUsed, which they do not always fill in.
+	//
+	// The regular dimension goes by two names: nethermind and ethrex call it
+	// regularGasUsed, reth calls it executionGasUsed. Both are read into this field, so
+	// the dimension is available whichever name the client used.
+	RegularGasUsed hexutil.Uint64 `json:"regularGasUsed"`
+	StateGasUsed   hexutil.Uint64 `json:"stateGasUsed"`
+	GasRefund      hexutil.Uint64 `json:"gasRefund"`
+}
+
+// TotalGasUsed returns the gas the call consumed across both EIP-8037 dimensions.
+//
+// gasUsed is normally their sum, but not always: ethrex leaves it at zero on the root
+// frame of a frame transaction while still reporting the dimensions, so falling back to
+// their sum keeps the call's cost visible rather than recording it as free.
+func (c *CallTraceCall) TotalGasUsed() uint64 {
+	if c.GasUsed != 0 {
+		return uint64(c.GasUsed)
+	}
+
+	return uint64(c.RegularGasUsed) + uint64(c.StateGasUsed)
 }
 
 // CallTypeFromString converts a callTracer type string to a numeric call type.
@@ -115,11 +148,16 @@ func CallTraceCallValue(c *CallTraceCall) uint256.Int {
 
 // TraceBlockByHash calls debug_traceBlockByHash with the callTracer configuration.
 // Returns one CallTraceResult per transaction in the block.
-// Uses streaming JSON decoding to avoid buffering the entire (potentially
-// hundreds of MB) response as an intermediate json.RawMessage.
+//
+// The response is decoded as it arrives and every call frame payload is pruned
+// to payloadLimit bytes (plus the one byte that marks it as truncated) on the
+// way in, so neither the raw JSON nor the decoded frames of a transaction that
+// deliberately inflates its trace are ever held in full. A payloadLimit of zero
+// or less keeps payloads intact.
 func (ec *ExecutionClient) TraceBlockByHash(
 	ctx context.Context,
 	blockHash common.Hash,
+	payloadLimit int,
 ) ([]CallTraceResult, error) {
 	tracerConfig := CallTracerConfig{
 		Tracer: "callTracer",
@@ -128,7 +166,7 @@ func (ec *ExecutionClient) TraceBlockByHash(
 	var results []CallTraceResult
 
 	err := ec.streamRPCCall(ctx, "debug_traceBlockByHash",
-		streamDecodeArray(&results),
+		decodeCallTraceResults(&results, payloadLimit),
 		blockHash, tracerConfig,
 	)
 	if err != nil {

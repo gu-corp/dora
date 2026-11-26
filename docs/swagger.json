@@ -718,6 +718,80 @@
                 }
             }
         },
+        "/v1/epoch/{epoch}/duties": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the attester committees for every slot in the specified epoch. Committee members are global validator indices in committee order.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Epoch"
+                ],
+                "summary": "Get epoch attester duties",
+                "operationId": "getEpochDuties",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Epoch number",
+                        "name": "epoch",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve duties on the fork with this committee-shuffling dependent root (0x-prefixed hex)",
+                        "name": "dependent_root",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve duties on the fork that this block root sits on (0x-prefixed hex)",
+                        "name": "block_root",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIEpochDutiesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid parameters",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Duties not available",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/v1/epoch/{epoch}/health": {
             "get": {
                 "description": "Returns the vote, proposal and payload participation rates for an epoch. The chain is only fully healthy when all three reach 100%. Post-ePBS (EIP-7732) payloads are revealed separately from beacon blocks and may be missing.",
@@ -1367,7 +1441,7 @@
         },
         "/v1/slot/{slotOrHash}/inclusion_lists": {
             "get": {
-                "description": "Returns the cached EIP-7805 inclusion lists for a slot, with each transaction\nmarked as included or not based on whether it appears in the slot's block transactions.",
+                "description": "Returns the EIP-7805 inclusion lists published in a slot: the inclusion list committee\nwith each member's submission status, the lists with their gossip observations, and for\nevery block of the following slot how its execution payload treated each list transaction\n(included, validly omitted with the reason, not enforced, or unsatisfied).",
                 "produces": [
                     "application/json"
                 ],
@@ -1497,6 +1571,18 @@
                         "name": "slotOrHash",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve the PTC on the fork with this committee-shuffling dependent root (0x-prefixed hex)",
+                        "name": "dependent_root",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve the PTC on the fork that this block root sits on (0x-prefixed hex)",
+                        "name": "block_root",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1517,6 +1603,86 @@
                     },
                     "404": {
                         "description": "Slot not found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/slot/{slot}/committees": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns the attester committees for the specified slot. Committee members are global validator indices in committee order.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Slot"
+                ],
+                "summary": "Get slot attester committees",
+                "operationId": "getSlotCommittees",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot number",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Comma-separated list of committee indices to filter by",
+                        "name": "committee",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve committees on the fork with this committee-shuffling dependent root (0x-prefixed hex)",
+                        "name": "dependent_root",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Resolve committees on the fork that this block root sits on (0x-prefixed hex)",
+                        "name": "block_root",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.APISlotCommitteesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid parameters",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Committees not available",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2259,6 +2425,130 @@
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.APIValidatorsActivityResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid parameters",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/validators/status": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns status, slashed flag and lifecycle epochs for up to 10000 validators by index. Supports GET with query params or POST with JSON body for large lists. Unknown indices are omitted from the response.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "validators"
+                ],
+                "summary": "Get validator status in bulk",
+                "operationId": "getValidatorsStatus",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated list of validator indices (GET only)",
+                        "name": "indices",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Request body for POST requests with indices array",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIValidatorsStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIValidatorsStatusResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid parameters",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns status, slashed flag and lifecycle epochs for up to 10000 validators by index. Supports GET with query params or POST with JSON body for large lists. Unknown indices are omitted from the response.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "validators"
+                ],
+                "summary": "Get validator status in bulk",
+                "operationId": "getValidatorsStatus",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Comma-separated list of validator indices (GET only)",
+                        "name": "indices",
+                        "in": "query"
+                    },
+                    {
+                        "description": "Request body for POST requests with indices array",
+                        "name": "body",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIValidatorsStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIValidatorsStatusResponse"
                         }
                     },
                     "400": {
@@ -3301,6 +3591,57 @@
                 }
             }
         },
+        "api.APIEpochDutiesData": {
+            "type": "object",
+            "properties": {
+                "committees_per_slot": {
+                    "type": "integer"
+                },
+                "dependent_root": {
+                    "type": "string"
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "slots": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.APIEpochDutiesSlotInfo"
+                    }
+                }
+            }
+        },
+        "api.APIEpochDutiesResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.APIEpochDutiesData"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.APIEpochDutiesSlotInfo": {
+            "type": "object",
+            "properties": {
+                "committees": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "proposer": {
+                    "type": "integer"
+                },
+                "slot": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.APIEpochHealthResponseV1": {
             "type": "object",
             "properties": {
@@ -3826,7 +4167,7 @@
                     "type": "integer"
                 },
                 "type": {
-                    "description": "\"consensus\" or \"bpo\"",
+                    "description": "\"consensus\", \"bpo\" or \"execution\" (EL-only)",
                     "type": "string"
                 },
                 "version": {
@@ -4270,6 +4611,13 @@
                 "reorg_depth": {
                     "type": "integer"
                 },
+                "seen_count": {
+                    "description": "Gossip visibility: SeenCount of SeenTotal connected clients observed the bid\non gossip. SeenTotal 0 = no observation data available for this bid.\nPer-client details are served by the /slot/{slotOrHash}/bidseen page endpoint.",
+                    "type": "integer"
+                },
+                "seen_total": {
+                    "type": "integer"
+                },
                 "slot": {
                     "type": "integer"
                 },
@@ -4439,6 +4787,48 @@
                 }
             }
         },
+        "api.APISlotCommitteeInfo": {
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "integer"
+                },
+                "validators": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "api.APISlotCommitteesData": {
+            "type": "object",
+            "properties": {
+                "committees": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.APISlotCommitteeInfo"
+                    }
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "slot": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.APISlotCommitteesResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.APISlotCommitteesData"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "api.APISlotData": {
             "type": "object",
             "properties": {
@@ -4519,95 +4909,11 @@
                 }
             }
         },
-        "api.APISlotInclusionList": {
-            "type": "object",
-            "properties": {
-                "inclusion_list_committee_root": {
-                    "type": "string"
-                },
-                "signature": {
-                    "type": "string"
-                },
-                "transactions": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/api.APISlotInclusionListTransaction"
-                    }
-                },
-                "transactions_count": {
-                    "type": "integer"
-                },
-                "validator_index": {
-                    "type": "integer"
-                },
-                "validator_name": {
-                    "type": "string"
-                }
-            }
-        },
-        "api.APISlotInclusionListTransaction": {
-            "type": "object",
-            "properties": {
-                "data_len": {
-                    "type": "integer"
-                },
-                "decode_error": {
-                    "type": "string"
-                },
-                "from": {
-                    "type": "string"
-                },
-                "gas_limit": {
-                    "type": "integer"
-                },
-                "hash": {
-                    "type": "string"
-                },
-                "index": {
-                    "type": "integer"
-                },
-                "is_included": {
-                    "type": "boolean"
-                },
-                "nonce": {
-                    "type": "integer"
-                },
-                "to": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "integer"
-                },
-                "value": {
-                    "type": "string"
-                }
-            }
-        },
-        "api.APISlotInclusionListsData": {
-            "type": "object",
-            "properties": {
-                "block_root": {
-                    "type": "string"
-                },
-                "count": {
-                    "type": "integer"
-                },
-                "inclusion_lists": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/api.APISlotInclusionList"
-                    }
-                },
-                "slot": {
-                    "type": "integer"
-                }
-            }
-        },
         "api.APISlotInclusionListsResponse": {
             "type": "object",
             "properties": {
                 "data": {
-                    "$ref": "#/definitions/api.APISlotInclusionListsData"
+                    "$ref": "#/definitions/services.SlotInclusionListsView"
                 },
                 "status": {
                     "type": "string"
@@ -4985,6 +5291,9 @@
                 "public_key": {
                     "type": "string"
                 },
+                "slashed": {
+                    "type": "boolean"
+                },
                 "status": {
                     "type": "string"
                 },
@@ -4992,6 +5301,9 @@
                     "type": "integer"
                 },
                 "validator_liveness_max": {
+                    "type": "integer"
+                },
+                "withdrawable_epoch": {
                     "type": "integer"
                 },
                 "withdrawal_address": {
@@ -5077,6 +5389,32 @@
                     "type": "integer"
                 },
                 "total_eligible_ether": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.APIValidatorStatusInfo": {
+            "type": "object",
+            "properties": {
+                "activation_epoch": {
+                    "type": "integer"
+                },
+                "effective_balance": {
+                    "type": "integer"
+                },
+                "exit_epoch": {
+                    "type": "integer"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "slashed": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "withdrawable_epoch": {
                     "type": "integer"
                 }
             }
@@ -5177,6 +5515,42 @@
             "properties": {
                 "data": {
                     "$ref": "#/definitions/api.APIValidatorsData"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.APIValidatorsStatusData": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "validators": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.APIValidatorStatusInfo"
+                    }
+                }
+            }
+        },
+        "api.APIValidatorsStatusRequest": {
+            "type": "object",
+            "properties": {
+                "indices": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "api.APIValidatorsStatusResponse": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/api.APIValidatorsStatusData"
                 },
                 "status": {
                     "type": "string"
@@ -5528,6 +5902,245 @@
                 },
                 "min_time": {
                     "type": "integer"
+                }
+            }
+        },
+        "services.SlotInclusionListEntry": {
+            "type": "object",
+            "properties": {
+                "dependent_root": {
+                    "type": "string"
+                },
+                "first_seen": {
+                    "description": "FirstSeen is the earliest observation as ms offset from slot start.",
+                    "type": "integer"
+                },
+                "seen": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListSeenBy"
+                    }
+                },
+                "signature": {
+                    "type": "string"
+                },
+                "transactions": {
+                    "description": "Transactions holds the list's transactions in list order as indexes\ninto SlotInclusionListsView.Transactions.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "validator_index": {
+                    "type": "integer"
+                },
+                "validator_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "services.SlotInclusionListMember": {
+            "type": "object",
+            "properties": {
+                "first_seen": {
+                    "description": "FirstSeen is the earliest observation of a list of the member as ms\noffset from slot start.",
+                    "type": "integer"
+                },
+                "lists": {
+                    "description": "Lists holds the indexes of the member's lists in SlotInclusionListsView.Lists.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "status": {
+                    "description": "Status is \"submitted\", \"late\", \"equivocated\" or \"missing\".",
+                    "type": "string"
+                },
+                "validator_index": {
+                    "type": "integer"
+                },
+                "validator_name": {
+                    "type": "string"
+                }
+            }
+        },
+        "services.SlotInclusionListOutcome": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "description": "Group is \"included\", \"not_enforced\", \"omitted\" (validly left out),\n\"unsatisfied\" (inclusion list violation) or \"unknown\".",
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is the persisted status code (blockdb ILTxStatus*).",
+                    "type": "integer"
+                }
+            }
+        },
+        "services.SlotInclusionListSeenBy": {
+            "type": "object",
+            "properties": {
+                "client": {
+                    "description": "Client is an index into SlotInclusionListsView.Clients.",
+                    "type": "integer"
+                },
+                "time": {
+                    "description": "Time is the first-seen offset in ms from slot start.",
+                    "type": "integer"
+                }
+            }
+        },
+        "services.SlotInclusionListTarget": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "integer"
+                },
+                "bid_acknowledged": {
+                    "description": "BidAcknowledged holds, per committee member, whether the block's\nexecution payload bid acknowledges a list of the member\n(inclusion_list_bits). Nil if the bid is not available.",
+                    "type": "array",
+                    "items": {
+                        "type": "boolean"
+                    }
+                },
+                "block_hash": {
+                    "type": "string"
+                },
+                "block_number": {
+                    "type": "integer"
+                },
+                "block_root": {
+                    "type": "string"
+                },
+                "evaluated": {
+                    "description": "Evaluated is false if the lists have not been checked against the block.",
+                    "type": "boolean"
+                },
+                "gas_left": {
+                    "type": "integer"
+                },
+                "lists": {
+                    "description": "Lists holds, per list, why the list is not enforced against this block:\n\"late\", \"equivocation\" or \"wrong_branch\", or \"not_evaluated\" if the\nevaluation does not cover the list. Empty if it is enforced.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "payload_status": {
+                    "description": "PayloadStatus is \"canonical\" if the chain built on the block's payload,\n\"orphaned\" if it did not and \"missing\" if the payload was never revealed.\nFork choice does not extend a payload that leaves the lists unsatisfied,\nso this is how the network judged the payload.",
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is \"canonical\" or \"orphaned\".",
+                    "type": "string"
+                },
+                "transactions": {
+                    "description": "Transactions holds the outcome per entry of SlotInclusionListsView.Transactions.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListOutcome"
+                    }
+                },
+                "unsatisfied": {
+                    "type": "integer"
+                }
+            }
+        },
+        "services.SlotInclusionListTransaction": {
+            "type": "object",
+            "properties": {
+                "data_len": {
+                    "type": "integer"
+                },
+                "decoded": {
+                    "type": "boolean"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "max_fee_per_gas": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "raw": {
+                    "description": "Raw is the encoded transaction as carried by the lists.",
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "integer"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "services.SlotInclusionListsView": {
+            "type": "object",
+            "properties": {
+                "clients": {
+                    "description": "Clients holds the observer client names; observations reference them by index.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "committee": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListMember"
+                    }
+                },
+                "due_ms": {
+                    "description": "DueMs is the inclusion list due time as ms offset into the slot. Lists\nfirst seen after it are not enforced.",
+                    "type": "integer"
+                },
+                "lists": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListEntry"
+                    }
+                },
+                "slot": {
+                    "description": "Slot is the slot the lists were published in.",
+                    "type": "integer"
+                },
+                "target_slot": {
+                    "description": "TargetSlot is the slot whose execution payload the lists constrain.",
+                    "type": "integer"
+                },
+                "target_state": {
+                    "description": "TargetState tells why Targets is empty: \"pending\" while the target slot\nhas not passed, \"missed\" if it has no block. Empty otherwise.",
+                    "type": "string"
+                },
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListTarget"
+                    }
+                },
+                "transactions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.SlotInclusionListTransaction"
+                    }
                 }
             }
         }

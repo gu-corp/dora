@@ -9,21 +9,19 @@ import (
 	"time"
 
 	"github.com/ethpandaops/dora/utils"
-	"github.com/ethpandaops/ethwallclock"
 	v1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 type ChainState struct {
+	Wallclock
+
 	specMutex   sync.RWMutex
 	specs       *ChainSpec
 	clientSpecs map[*Client]map[string]interface{}
 
 	genesisMutex sync.Mutex
 	genesis      *v1.Genesis
-
-	wallclockMutex sync.Mutex
-	wallclock      *ethwallclock.EthereumBeaconChain
 
 	finalityMutex sync.RWMutex
 	finality      *v1.Finality
@@ -33,15 +31,17 @@ type ChainState struct {
 	fastConfirmedRoot     phase0.Root
 	lastFastConfirmation  time.Time
 
-	checkpointDispatcher     utils.Dispatcher[*v1.Finality]
-	wallclockEpochDispatcher utils.Dispatcher[*ethwallclock.Epoch]
-	wallclockSlotDispatcher  utils.Dispatcher[*ethwallclock.Slot]
+	checkpointDispatcher utils.Dispatcher[*v1.Finality]
 }
 
 func newChainState() *ChainState {
-	return &ChainState{
+	cs := &ChainState{
 		clientSpecs: make(map[*Client]map[string]interface{}),
 	}
+
+	cs.initWallclock()
+
+	return cs
 }
 
 func (cs *ChainState) setGenesis(genesis *v1.Genesis) error {
@@ -78,12 +78,18 @@ func (cs *ChainState) updateClientSpecs(client *Client, specValues map[string]in
 
 	cs.specs = majoritySpecs
 
+	if err := cs.updateWallclock(); err != nil {
+		client.logger.Warnf("wallclock update failed: %v", err)
+	}
+
 	// Update warnings for all clients against the new majority spec
 	if majoritySpecs != nil {
 		for c, specs := range cs.clientSpecs {
 			warnings := cs.checkClientSpecWarnings(majoritySpecs, specs)
+			c.specsMutex.Lock()
 			c.specWarnings = warnings
 			c.hasBadSpecs = len(warnings) > 0
+			c.specsMutex.Unlock()
 		}
 	}
 
@@ -192,25 +198,13 @@ func (cs *ChainState) computeMajoritySpecs() (*ChainSpec, error) {
 	return majoritySpec, nil
 }
 
-func (cs *ChainState) initWallclock() {
-	cs.wallclockMutex.Lock()
-	defer cs.wallclockMutex.Unlock()
-
-	if cs.wallclock != nil {
-		return
+// updateWallclock applies the slot timings of the current specs to the wallclock.
+func (cs *ChainState) updateWallclock() error {
+	if cs.genesis == nil || cs.specs == nil {
+		return nil
 	}
 
-	if cs.specs == nil || cs.genesis == nil {
-		return
-	}
-
-	cs.wallclock = ethwallclock.NewEthereumBeaconChain(cs.genesis.GenesisTime, time.Duration(cs.specs.SlotDurationMs)*time.Millisecond, cs.specs.SlotsPerEpoch)
-	cs.wallclock.OnEpochChanged(func(current ethwallclock.Epoch) {
-		cs.wallclockEpochDispatcher.Fire(&current)
-	})
-	cs.wallclock.OnSlotChanged(func(current ethwallclock.Slot) {
-		cs.wallclockSlotDispatcher.Fire(&current)
-	})
+	return cs.SetupClock(cs.genesis.GenesisTime, cs.specs)
 }
 
 func (cs *ChainState) setFinalizedCheckpoint(finality *v1.Finality) {
@@ -319,34 +313,6 @@ func (cs *ChainState) EpochToSlot(epoch phase0.Epoch) phase0.Slot {
 	}
 
 	return phase0.Slot(epoch) * phase0.Slot(cs.specs.SlotsPerEpoch)
-}
-
-func (cs *ChainState) SlotToTime(slot phase0.Slot) time.Time {
-	if cs.specs == nil || cs.genesis == nil {
-		return time.Time{}
-	}
-
-	return cs.genesis.GenesisTime.Add(time.Duration(uint64(slot)*cs.specs.SlotDurationMs) * time.Millisecond)
-}
-
-func (cs *ChainState) EpochToTime(epoch phase0.Epoch) time.Time {
-	if cs.specs == nil || cs.genesis == nil {
-		return time.Time{}
-	}
-
-	return cs.genesis.GenesisTime.Add(time.Duration(uint64(cs.EpochToSlot(epoch))*cs.specs.SlotDurationMs) * time.Millisecond)
-}
-
-func (cs *ChainState) TimeToSlot(timestamp time.Time) phase0.Slot {
-	if cs.specs == nil || cs.genesis == nil {
-		return 0
-	}
-
-	if cs.genesis.GenesisTime.Compare(timestamp) > 0 {
-		return 0
-	}
-
-	return phase0.Slot(uint64(timestamp.Sub(cs.genesis.GenesisTime).Milliseconds()) / cs.specs.SlotDurationMs)
 }
 
 func (cs *ChainState) SlotToSlotIndex(slot phase0.Slot) phase0.Slot {
@@ -468,6 +434,8 @@ func (cs *ChainState) GetForkVersionAtEpoch(epoch phase0.Epoch) phase0.Version {
 	}
 
 	switch {
+	case cs.specs.Eip8198ForkEpoch != nil && epoch >= phase0.Epoch(*cs.specs.Eip8198ForkEpoch):
+		return cs.specs.Eip8198ForkVersion
 	case cs.specs.HezeForkEpoch != nil && epoch >= phase0.Epoch(*cs.specs.HezeForkEpoch):
 		return cs.specs.HezeForkVersion
 	case cs.specs.GloasForkEpoch != nil && epoch >= phase0.Epoch(*cs.specs.GloasForkEpoch):
@@ -555,4 +523,77 @@ func (cs *ChainState) GetActivationExitChurnLimit(totalActiveBalance uint64) uin
 	}
 
 	return balanceChurnLimit
+}
+
+// GetActivationChurnLimit returns the per-epoch churn budget that deposits consume.
+//
+// Gloas (EIP-8061) splits this off from the shared activation/exit churn limit and gives it its
+// own quotient and cap, so deposits and exits no longer compete for the same budget.
+// https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/beacon-chain.md#new-get_activation_churn_limit
+func (cs *ChainState) GetActivationChurnLimit(epoch phase0.Epoch, totalActiveBalance uint64) uint64 {
+	if cs.specs == nil {
+		return 0
+	}
+
+	if !cs.IsEip7732Enabled(epoch) || cs.specs.ChurnLimitQuotientGloas == 0 {
+		return cs.GetActivationExitChurnLimit(totalActiveBalance)
+	}
+
+	churn := totalActiveBalance / cs.specs.ChurnLimitQuotientGloas
+	if churn < cs.specs.MinPerEpochChurnLimitElectra {
+		churn = cs.specs.MinPerEpochChurnLimitElectra
+	}
+	churn -= churn % cs.specs.EffectiveBalanceIncrement
+
+	if churn > cs.specs.MaxPerEpochActivationChurnLimitGloas {
+		return cs.specs.MaxPerEpochActivationChurnLimitGloas
+	}
+
+	return churn
+}
+
+// GetExitChurnLimit returns the per-epoch churn budget that voluntary exits consume.
+//
+// Gloas (EIP-8061) derives it from CHURN_LIMIT_QUOTIENT_GLOAS like the activation churn, but
+// without the MAX_PER_EPOCH_ACTIVATION_CHURN_LIMIT_GLOAS cap. Before Gloas exits share the
+// activation/exit churn limit with deposits.
+// https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/beacon-chain.md#new-get_exit_churn_limit
+func (cs *ChainState) GetExitChurnLimit(epoch phase0.Epoch, totalActiveBalance uint64) uint64 {
+	if cs.specs == nil {
+		return 0
+	}
+
+	if !cs.IsEip7732Enabled(epoch) || cs.specs.ChurnLimitQuotientGloas == 0 {
+		return cs.GetActivationExitChurnLimit(totalActiveBalance)
+	}
+
+	churn := totalActiveBalance / cs.specs.ChurnLimitQuotientGloas
+	if churn < cs.specs.MinPerEpochChurnLimitElectra {
+		churn = cs.specs.MinPerEpochChurnLimitElectra
+	}
+
+	return churn - churn%cs.specs.EffectiveBalanceIncrement
+}
+
+// GetConsolidationChurnLimit returns the per-epoch churn limit reserved for consolidations
+// at the given epoch.
+//
+// Since Gloas the consolidation churn is derived directly from the total active balance via
+// CONSOLIDATION_CHURN_LIMIT_QUOTIENT, while before it was the leftover of the balance churn
+// after subtracting the activation/exit churn.
+//
+// Gloas: https://github.com/ethereum/consensus-specs/blob/master/specs/gloas/beacon-chain.md#modified-get_consolidation_churn_limit
+// Electra: https://github.com/ethereum/consensus-specs/blob/master/specs/electra/beacon-chain.md#new-get_consolidation_churn_limit
+func (cs *ChainState) GetConsolidationChurnLimit(epoch phase0.Epoch, totalActiveBalance uint64) uint64 {
+	if cs.specs == nil {
+		return 0
+	}
+
+	if cs.IsEip7732Enabled(epoch) && cs.specs.ConsolidationChurnLimitQuotient > 0 {
+		churnLimit := totalActiveBalance / cs.specs.ConsolidationChurnLimitQuotient
+
+		return churnLimit - (churnLimit % cs.specs.EffectiveBalanceIncrement)
+	}
+
+	return cs.GetBalanceChurnLimit(totalActiveBalance) - cs.GetActivationExitChurnLimit(totalActiveBalance)
 }

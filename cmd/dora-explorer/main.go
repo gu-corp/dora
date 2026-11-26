@@ -18,6 +18,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/negroni"
 
+	"github.com/ethpandaops/dora/clients/xatu"
 	"github.com/ethpandaops/dora/db"
 	"github.com/ethpandaops/dora/handlers"
 	"github.com/ethpandaops/dora/handlers/api"
@@ -87,6 +88,30 @@ func main() {
 	err = services.StartTxSignaturesService()
 	if err != nil {
 		logger.Fatalf("error starting tx signature service: %v", err)
+	}
+
+	if cfg.Xatu.Enabled {
+		specs := services.GlobalBeaconService.GetChainState().GetSpecs()
+
+		// Only invalid configuration fails here; reachability is checked in the
+		// background so a ClickHouse outage cannot block startup.
+		xatuClient, err := xatu.NewClient(&cfg.Xatu, specs.ConfigName, logger)
+		if err != nil {
+			logger.Fatalf("invalid xatu configuration: %v", err)
+		}
+
+		xatu.GlobalClient = xatuClient
+		logger.WithField("module", "xatu").Infof("xatu clickhouse configured (network: %v)", xatuClient.Network())
+
+		if cfg.Xatu.Cbt.ClickhouseDsn != "" {
+			cbtClient, err := xatu.NewCbtClient(&cfg.Xatu, specs.ConfigName, logger)
+			if err != nil {
+				logger.Fatalf("invalid xatu cbt configuration: %v", err)
+			}
+
+			xatu.GlobalCbtClient = cbtClient
+			logger.WithField("module", "xatu-cbt").Infof("xatu cbt clickhouse configured (network: %v)", cbtClient.Network())
+		}
 	}
 
 	if cfg.RateLimit.Enabled {
@@ -185,6 +210,9 @@ func startFrontend(router *mux.Router) {
 	router.HandleFunc("/clients/consensus", handlers.ClientsCL).Methods("GET")
 	router.HandleFunc("/clients/consensus/refresh", handlers.ClientsCLRefresh).Methods("POST")
 	router.HandleFunc("/clients/consensus/refresh/status", handlers.ClientsCLRefreshStatus).Methods("GET")
+	router.HandleFunc("/clients/consensus/nodes", handlers.ClientsCLNodes).Methods("GET")
+	router.HandleFunc("/clients/consensus/nodes/{peerId}/peers", handlers.ClientsCLNodePeers).Methods("GET")
+	router.HandleFunc("/clients/consensus/peermap", handlers.ClientsCLPeerMap).Methods("GET")
 	router.HandleFunc("/clients/execution", handlers.ClientsEl).Methods("GET")
 	router.HandleFunc("/clients/execution/refresh", handlers.ClientsELRefresh).Methods("POST")
 	router.HandleFunc("/clients/execution/refresh/status", handlers.ClientsELRefreshStatus).Methods("GET")
@@ -198,7 +226,12 @@ func startFrontend(router *mux.Router) {
 	router.HandleFunc("/slot/{slotOrHash}", handlers.Slot).Methods("GET")
 	router.HandleFunc("/slot/{slotOrHash}/tracoor", handlers.SlotTracoor).Methods("GET")
 	router.HandleFunc("/slot/{slotOrHash}/duties", handlers.SlotDuties).Methods("GET")
+	router.HandleFunc("/slot/{slotOrHash}/bidseen", handlers.SlotBidSeen).Methods("GET")
+	router.HandleFunc("/slot/{slotOrHash}/inclusionlists", handlers.SlotInclusionLists).Methods("GET")
+	router.HandleFunc("/slot/{slotOrHash}/arrival", handlers.SlotArrival).Methods("GET")
+	router.HandleFunc("/slot/{slotOrHash}/waves", handlers.SlotWaves).Methods("GET")
 	router.HandleFunc("/slot/{root}/blob/{index}", handlers.SlotBlob).Methods("GET")
+	router.HandleFunc("/slot/{slotOrHash}/bal", handlers.SlotBlockAccessList).Methods("GET")
 	router.HandleFunc("/blocks", handlers.Blocks).Methods("GET")
 	router.HandleFunc("/blocks/filtered", handlers.BlocksFiltered).Methods("GET")
 	router.HandleFunc("/block/{numberOrHash}", handlers.Block).Methods("GET")
@@ -320,12 +353,15 @@ func startApi(router *mux.Router) {
 		{"/v1/validator/{indexOrPubkey}/deposits", api.ApiValidatorDepositsV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/validators", api.APIValidatorsV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/validators/activity", api.APIValidatorsActivityV1, []string{"GET", "OPTIONS"}, 2},
+		{"/v1/validators/status", api.APIValidatorsStatusV1, []string{"GET", "POST", "OPTIONS"}, 2},
 		{"/v1/validator_names", api.APIValidatorNamesV1, []string{"GET", "POST", "OPTIONS"}, 1},
 
 		// Epoch and slot APIs
 		{"/v1/epochs", api.APIEpochsV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/epoch/{epoch}", api.ApiEpochV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/epoch/{epoch}/health", api.ApiEpochHealthV1, []string{"GET", "OPTIONS"}, 1},
+		{"/v1/epoch/{epoch}/duties", api.APIEpochDutiesV1, []string{"GET", "OPTIONS"}, 2},
+		{"/v1/slot/{slot}/committees", api.APISlotCommitteesV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/slot/{slotOrHash}", api.APISlotV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/slot/{slotOrHash}/bids", api.APISlotBidsV1, []string{"GET", "OPTIONS"}, 1},
 		{"/v1/slot/{slotOrHash}/block_access_list", api.APISlotBlockAccessListV1, []string{"GET", "OPTIONS"}, 2},

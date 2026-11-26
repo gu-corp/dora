@@ -35,7 +35,7 @@ type APINetworkForkInfo struct {
 	Active           bool    `json:"active"`
 	Scheduled        bool    `json:"scheduled"`
 	Time             int64   `json:"time,omitempty"`
-	Type             string  `json:"type"` // "consensus" or "bpo"
+	Type             string  `json:"type"` // "consensus", "bpo" or "execution" (EL-only)
 	ForkDigest       string  `json:"fork_digest"`
 	MaxBlobsPerBlock *uint64 `json:"max_blobs_per_block,omitempty"` // only for BPO forks
 }
@@ -138,26 +138,34 @@ func buildNetworkForks(chainState *consensus.ChainState) []*APINetworkForkInfo {
 	addConsensusFork("Fulu", specs.FuluForkEpoch, specs.FuluForkVersion)
 	addConsensusFork("Gloas", specs.GloasForkEpoch, specs.GloasForkVersion)
 	addConsensusFork("Heze", specs.HezeForkEpoch, specs.HezeForkVersion)
+	addConsensusFork("EIP-8198", specs.Eip8198ForkEpoch, specs.Eip8198ForkVersion)
 
-	// Add BPO forks from BLOB_SCHEDULE
-	for i, blobSchedule := range specs.BlobSchedule {
-		forkVersion := chainState.GetForkVersionAtEpoch(phase0.Epoch(blobSchedule.Epoch))
-		blobParams := &consensus.BlobScheduleEntry{
-			Epoch:            blobSchedule.Epoch,
-			MaxBlobsPerBlock: blobSchedule.MaxBlobsPerBlock,
-		}
-		forkDigest := chainState.GetForkDigest(forkVersion, blobParams)
-
+	// Add BPO forks (from el genesis config if available, cl BLOB_SCHEDULE otherwise)
+	for _, bpoFork := range services.GlobalBeaconService.GetBpoForks() {
 		forks = append(forks, &APINetworkForkInfo{
-			Name:             fmt.Sprintf("BPO%d", i+1),
+			Name:             bpoFork.Name,
 			Version:          nil,
-			Epoch:            blobSchedule.Epoch,
-			Active:           uint64(currentEpoch) >= blobSchedule.Epoch,
+			Epoch:            uint64(bpoFork.Epoch),
+			Active:           currentEpoch >= bpoFork.Epoch,
 			Scheduled:        true,
-			Time:             chainState.EpochToTime(phase0.Epoch(blobSchedule.Epoch)).Unix(),
+			Time:             bpoFork.Time.Unix(),
 			Type:             "bpo",
-			ForkDigest:       fmt.Sprintf("0x%x", forkDigest),
-			MaxBlobsPerBlock: &blobSchedule.MaxBlobsPerBlock,
+			ForkDigest:       fmt.Sprintf("0x%x", bpoFork.ForkDigest),
+			MaxBlobsPerBlock: &bpoFork.MaxBlobsPerBlock,
+		})
+	}
+
+	// Add EL-only forks (EL fork scheduled while its CL counterpart is not)
+	for _, elFork := range services.GlobalBeaconService.GetElOnlyForks() {
+		forks = append(forks, &APINetworkForkInfo{
+			Name:       elFork.Name,
+			Version:    nil,
+			Epoch:      uint64(elFork.Epoch),
+			Active:     currentEpoch >= elFork.Epoch,
+			Scheduled:  true,
+			Time:       elFork.Time.Unix(),
+			Type:       "execution",
+			ForkDigest: fmt.Sprintf("0x%x", elFork.ForkDigest),
 		})
 	}
 

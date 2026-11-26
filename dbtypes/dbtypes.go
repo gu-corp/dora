@@ -47,10 +47,11 @@ const (
 	PayloadStatusOrphaned
 )
 
-type SlotHeader struct {
+type MissedSlot struct {
 	Slot     uint64     `db:"slot"`
 	Proposer uint64     `db:"proposer"`
 	Status   SlotStatus `db:"status"`
+	IlCount  int16      `db:"il_count"`
 }
 
 type Slot struct {
@@ -94,6 +95,8 @@ type Slot struct {
 	EthBidValue           uint64        `db:"eth_bid_value"`           // Bid value in Gwei (0 for self-builds and pre-gloas blocks)
 	BuilderPaymentWeight  uint64        `db:"builder_payment_weight"`  // Gloas: same-slot attester balance backing the builder payment quorum (Gwei); 0 pre-gloas
 	BuilderPaymentPercent float32       `db:"builder_payment_percent"` // Gloas: BuilderPaymentWeight as % of the per-slot quorum base (total active balance / slots-per-epoch)
+	IlCount               int16         `db:"il_count"`                // Heze: number of inclusion lists published in this slot
+	IlUnsatisfied         int16         `db:"il_unsatisfied"`          // Heze: transactions of the previous slot's inclusion lists this block's payload left unsatisfied; -1 if not evaluated
 }
 
 type Epoch struct {
@@ -651,7 +654,20 @@ type ElTxHash struct {
 const (
 	ElTxTypeMask   uint8 = 0x7F // bits 0-6: EVM tx type
 	ElTxFlagCreate uint8 = 0x80 // bit 7: contract-creation tx (raw recipient was null)
+
+	// ElTxTypeFrame is the EIP-8141 frame transaction type.
+	ElTxTypeFrame uint8 = 0x06
 )
+
+// IsMultiTarget reports whether a transaction addresses more than one recipient.
+//
+// Such a transaction has no recipient of its own, so its el_transactions row carries
+// to_id 0 - the id no account has - and its targets are read from the transaction
+// itself. Callers must not read that as a contract creation, which is the other reason
+// a row has no recipient.
+func IsMultiTarget(txType uint8) bool {
+	return txType&ElTxTypeMask == ElTxTypeFrame
+}
 
 // ElTransactionInternal is a per-account aggregate of internal calls within a
 // transaction. One row per (tx_uid, account_id) regardless of how many sub-
@@ -677,10 +693,12 @@ type ElAccount struct {
 	LastBlockUid uint64 `db:"last_block_uid"`
 }
 
-// EnsName holds a resolved primary ENS name for an execution address.
-// An empty Name is a persisted negative result (address has no primary name).
+// EnsName holds a resolved primary ENS name for an execution address on one network.
+// An empty Network is the local network (the chain this explorer indexes); an empty
+// Name is a persisted negative result (address has no primary name on that network).
 type EnsName struct {
 	Address      []byte `db:"address"`
+	Network      string `db:"network"`
 	Name         string `db:"name"`
 	ResolvedTime int64  `db:"resolved_time"`
 }
@@ -741,6 +759,11 @@ type BlockBid struct {
 	Slot         uint64 `db:"slot"`
 	Value        uint64 `db:"value"`
 	ElPayment    uint64 `db:"el_payment"`
+	// SeenCount is the number of clients that observed the bid on gossip.
+	// SeenTotal is the number of connected clients that could have seen it
+	// (0/0 = unknown, e.g. rows from before seen tracking existed).
+	SeenCount uint32 `db:"seen_count"`
+	SeenTotal uint32 `db:"seen_total"`
 }
 
 type Builder struct {

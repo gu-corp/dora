@@ -16,9 +16,10 @@ import (
 
 // BlockDb is the main wrapper for block database operations.
 type BlockDb struct {
-	engine       types.BlockDbEngine
-	execEngine   types.ExecDataEngine // nil if engine doesn't support exec data
-	dutiesEngine types.DutiesEngine   // nil if engine doesn't support duties storage
+	engine         types.BlockDbEngine
+	execEngine     types.ExecDataEngine // nil if engine doesn't support exec data
+	dutiesEngine   types.DutiesEngine   // nil if engine doesn't support duties storage
+	slotMetaEngine types.SlotMetaEngine // nil if engine doesn't support per-slot meta storage
 
 	txHashIndex       types.TxHashIndex // nil until detected natively or injected
 	txHashIndexNative bool              // true if provided by the engine (write post-commit), false if a relational adapter (write in-tx)
@@ -72,6 +73,9 @@ func InitWithPebble(config dtypes.PebbleBlockDBConfig, logger logrus.FieldLogger
 	if dutiesEngine, ok := engine.(types.DutiesEngine); ok {
 		db.dutiesEngine = dutiesEngine
 	}
+	if slotMetaEngine, ok := engine.(types.SlotMetaEngine); ok {
+		db.slotMetaEngine = slotMetaEngine
+	}
 	if txHashIndex, ok := engine.(types.TxHashIndex); ok {
 		db.txHashIndex = txHashIndex
 		db.txHashIndexNative = true
@@ -109,6 +113,9 @@ func InitWithS3(config dtypes.S3BlockDBConfig) error {
 	if dutiesEngine, ok := engine.(types.DutiesEngine); ok {
 		db.dutiesEngine = dutiesEngine
 	}
+	if slotMetaEngine, ok := engine.(types.SlotMetaEngine); ok {
+		db.slotMetaEngine = slotMetaEngine
+	}
 	if txHashIndex, ok := engine.(types.TxHashIndex); ok {
 		db.txHashIndex = txHashIndex
 		db.txHashIndexNative = true
@@ -137,6 +144,9 @@ func InitWithTiered(pebbleConfig dtypes.PebbleBlockDBConfig, s3Config dtypes.S3B
 	}
 	if dutiesEngine, ok := engine.(types.DutiesEngine); ok {
 		db.dutiesEngine = dutiesEngine
+	}
+	if slotMetaEngine, ok := engine.(types.SlotMetaEngine); ok {
+		db.slotMetaEngine = slotMetaEngine
 	}
 	if txHashIndex, ok := engine.(types.TxHashIndex); ok {
 		db.txHashIndex = txHashIndex
@@ -378,6 +388,46 @@ func (db *BlockDb) GetSlotPtc(ctx context.Context, firstSlot uint64, slot uint64
 	return db.dutiesEngine.GetSlotPtc(ctx, firstSlot, slot)
 }
 
+// AddDivergingEpochDuties stores the resolved duties of a diverging fork, keyed
+// by its (non-zero) dependent root. Returns stored size.
+func (db *BlockDb) AddDivergingEpochDuties(ctx context.Context, duties *types.EpochDuties) (int64, error) {
+	if db.dutiesEngine == nil {
+		return 0, fmt.Errorf("duties storage not supported by engine")
+	}
+	if duties.DependentRoot == ([32]byte{}) {
+		return 0, fmt.Errorf("diverging duties require a non-zero dependent root")
+	}
+	duties.Diverging = true
+	return db.dutiesEngine.AddDivergingEpochDuties(ctx, duties)
+}
+
+// GetEpochDutiesForRoot retrieves the full diverging-fork duties for an epoch
+// under the given dependent root (nil if not found).
+func (db *BlockDb) GetEpochDutiesForRoot(ctx context.Context, firstSlot uint64, depRoot [32]byte) (*types.EpochDuties, error) {
+	if db.dutiesEngine == nil {
+		return nil, nil
+	}
+	return db.dutiesEngine.GetEpochDutiesForRoot(ctx, firstSlot, depRoot)
+}
+
+// GetSlotCommitteesForRoot retrieves the attester committees for a single slot
+// of the diverging fork identified by depRoot (nil if not found).
+func (db *BlockDb) GetSlotCommitteesForRoot(ctx context.Context, firstSlot uint64, slot uint64, depRoot [32]byte) ([][]uint64, error) {
+	if db.dutiesEngine == nil {
+		return nil, nil
+	}
+	return db.dutiesEngine.GetSlotCommitteesForRoot(ctx, firstSlot, slot, depRoot)
+}
+
+// GetSlotPtcForRoot retrieves the PTC members for a single slot of the diverging
+// fork identified by depRoot (nil if not found).
+func (db *BlockDb) GetSlotPtcForRoot(ctx context.Context, firstSlot uint64, slot uint64, depRoot [32]byte) ([]uint64, error) {
+	if db.dutiesEngine == nil {
+		return nil, nil
+	}
+	return db.dutiesEngine.GetSlotPtcForRoot(ctx, firstSlot, slot, depRoot)
+}
+
 // HasEpochDuties checks if duties exist for an epoch.
 func (db *BlockDb) HasEpochDuties(ctx context.Context, firstSlot uint64) (bool, error) {
 	if db.dutiesEngine == nil {
@@ -392,4 +442,44 @@ func (db *BlockDb) PruneEpochDutiesBefore(ctx context.Context, maxFirstSlot uint
 		return 0, nil
 	}
 	return db.dutiesEngine.PruneEpochDutiesBefore(ctx, maxFirstSlot)
+}
+
+// GetObjectStats returns engine-level per-namespace object counts if the engine
+// supports a cheap scan (Pebble / tiered hot tier); otherwise nil.
+func (db *BlockDb) GetObjectStats(ctx context.Context) (*types.BlockDbObjectStats, error) {
+	if e, ok := db.engine.(types.ObjectStatsEngine); ok {
+		return e.GetObjectStats(ctx)
+	}
+	return nil, nil
+}
+
+// SupportsSlotMeta returns true if the underlying engine supports per-slot meta storage.
+func (db *BlockDb) SupportsSlotMeta() bool {
+	return db != nil && db.slotMetaEngine != nil
+}
+
+// AddSlotMeta stores the per-slot meta object. Returns stored size.
+func (db *BlockDb) AddSlotMeta(ctx context.Context, meta *types.SlotMeta) (int64, error) {
+	if db.slotMetaEngine == nil {
+		return 0, fmt.Errorf("per-slot meta storage not supported by engine")
+	}
+	return db.slotMetaEngine.AddSlotMeta(ctx, meta)
+}
+
+// GetSlotMeta retrieves the parts of the meta object for a slot selected by
+// flags (nil if not found). An object that is written back must be loaded
+// with types.SlotMetaFlagAll.
+func (db *BlockDb) GetSlotMeta(ctx context.Context, slot uint64, flags types.SlotMetaFlags) (*types.SlotMeta, error) {
+	if db.slotMetaEngine == nil {
+		return nil, nil
+	}
+	return db.slotMetaEngine.GetSlotMeta(ctx, slot, flags)
+}
+
+// PruneSlotMetaBefore deletes meta objects for all slots before maxSlot.
+func (db *BlockDb) PruneSlotMetaBefore(ctx context.Context, maxSlot uint64) (int64, error) {
+	if db.slotMetaEngine == nil {
+		return 0, nil
+	}
+	return db.slotMetaEngine.PruneSlotMetaBefore(ctx, maxSlot)
 }

@@ -15,9 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
-	v1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
@@ -29,6 +26,8 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/dora/blockdb"
+	"github.com/ethpandaops/dora/clients/consensus/rpc"
+	"github.com/ethpandaops/dora/clients/xatu"
 	"github.com/ethpandaops/dora/db"
 	"github.com/ethpandaops/dora/dbtypes"
 	"github.com/ethpandaops/dora/indexer/beacon"
@@ -38,6 +37,7 @@ import (
 	"github.com/ethpandaops/dora/types"
 	"github.com/ethpandaops/dora/types/models"
 	"github.com/ethpandaops/dora/utils"
+	"github.com/ethpandaops/spamoor/txtypes"
 )
 
 // Index will return the main "index" page using a go template
@@ -59,6 +59,7 @@ func Slot(w http.ResponseWriter, r *http.Request) {
 		"slot/builder_deposit_requests.html",
 		"slot/builder_exit_requests.html",
 		"slot/bids.html",
+		"slot/arrival.html",
 		"slot/ptc_votes.html",
 		"slot/inclusion_lists.html",
 		"slot/block_access_list.html",
@@ -266,6 +267,8 @@ func buildSlotPageData(ctx context.Context, blockSlot int64, blockRoot []byte) (
 		EpochFinalized: finalizedEpoch >= chainState.EpochOfSlot(slot),
 		Badges:         []*models.SlotPageBlockBadge{},
 		TracoorUrl:     utils.Config.Frontend.TracoorUrl,
+		XatuEnabled:    xatu.GlobalClient != nil,
+		XatuCbtEnabled: xatu.GlobalCbtClient != nil,
 	}
 
 	var epochStatsValues *beacon.EpochStatsValues
@@ -293,8 +296,15 @@ func buildSlotPageData(ctx context.Context, blockSlot int64, blockRoot []byte) (
 	}
 
 	// Get all blocks for this slot (used for multi-block display and proposer fallback)
-	slotBlocks, slotBlockProposers := getSlotBlocks(ctx, slot, blockRoot, blockData)
+	slotBlocks, slotBlockProposers, inclusionListIndex := getSlotBlocks(ctx, slot, blockRoot, blockData)
 	pageData.SlotBlocks = slotBlocks
+
+	// The inclusion lists published in this slot are loaded lazily; only their
+	// count from the slots index is known here.
+	if chainState.IsEip7805Enabled(epoch) && !pageData.Future {
+		pageData.InclusionListsEnabled = true
+		pageData.InclusionListsCount = uint64(max(inclusionListIndex.count, 0))
+	}
 
 	if blockData == nil {
 		pageData.Status = uint16(models.SlotStatusMissed)
@@ -337,6 +347,9 @@ func buildSlotPageData(ctx context.Context, blockSlot int64, blockRoot []byte) (
 			blockUid = dbBlock.BlockUid
 		}
 		pageData.Block = getSlotPageBlockData(ctx, blockData, epochStatsValues, blockUid)
+		if pageData.Block != nil && pageData.InclusionListsEnabled {
+			pageData.Block.InclusionListsUnsatisfied = int64(inclusionListIndex.unsatisfied)
+		}
 
 		// Expose block transactions to the access-list UI via a stable field.
 		if pageData.Block != nil && pageData.Block.Transactions != nil {
@@ -406,12 +419,24 @@ func buildSlotPageData(ctx context.Context, blockSlot int64, blockRoot []byte) (
 	return pageData, cacheTimeout
 }
 
+// slotInclusionListIndex holds the inclusion list values of the slots index
+// for a slot page.
+type slotInclusionListIndex struct {
+	// count is the number of inclusion lists published in the slot.
+	count int16
+	// unsatisfied is the number of transactions of the previous slot's lists
+	// that the displayed block left unsatisfied (-1 = not evaluated).
+	unsatisfied int16
+}
+
 // getSlotBlocks retrieves all blocks for a given slot and builds the SlotBlocks slice
 // for the multi-block display. Uses GetDbBlocksByFilter which handles both cache and database.
+// It also returns the slot's inclusion list index values, which are stored with the blocks.
 // Also returns a list of proposers from orphaned blocks (used as fallback when proposer is unknown).
-func getSlotBlocks(ctx context.Context, slot phase0.Slot, currentBlockRoot []byte, currentBlockData *services.CombinedBlockResponse) ([]*models.SlotPageSlotBlock, []uint64) {
+func getSlotBlocks(ctx context.Context, slot phase0.Slot, currentBlockRoot []byte, currentBlockData *services.CombinedBlockResponse) ([]*models.SlotPageSlotBlock, []uint64, slotInclusionListIndex) {
 	slotBlocks := make([]*models.SlotPageSlotBlock, 0)
 	orphanedProposers := make([]uint64, 0)
+	inclusionListIndex := slotInclusionListIndex{}
 	hasCanonicalOrMissed := false
 
 	// Get all blocks for the slot (from cache and database)
@@ -426,6 +451,9 @@ func getSlotBlocks(ctx context.Context, slot phase0.Slot, currentBlockRoot []byt
 		if dbBlock.Block == nil {
 			// This is a missed slot row (canonical proposer info without a block)
 			hasCanonicalOrMissed = true
+			if dbBlock.IlCount > inclusionListIndex.count {
+				inclusionListIndex.count = dbBlock.IlCount
+			}
 			slotBlocks = append(slotBlocks, &models.SlotPageSlotBlock{
 				BlockRoot: nil, // nil indicates missed
 				Status:    uint16(models.SlotStatusMissed),
@@ -462,6 +490,13 @@ func getSlotBlocks(ctx context.Context, slot phase0.Slot, currentBlockRoot []byt
 			Status:    status,
 			IsCurrent: isCurrent,
 		})
+
+		if dbBlock.Block.IlCount > inclusionListIndex.count {
+			inclusionListIndex.count = dbBlock.Block.IlCount
+		}
+		if isCurrent {
+			inclusionListIndex.unsatisfied = dbBlock.Block.IlUnsatisfied
+		}
 	}
 
 	// If no canonical or missed block was returned but there are orphaned blocks,
@@ -476,7 +511,7 @@ func getSlotBlocks(ctx context.Context, slot phase0.Slot, currentBlockRoot []byt
 		slotBlocks = append([]*models.SlotPageSlotBlock{missedBlock}, slotBlocks...)
 	}
 
-	return slotBlocks, orphanedProposers
+	return slotBlocks, orphanedProposers, inclusionListIndex
 }
 
 func getSlotPageBlockData(ctx context.Context, blockData *services.CombinedBlockResponse, epochStatsValues *beacon.EpochStatsValues, blockUid uint64) *models.SlotPageBlockData {
@@ -972,14 +1007,14 @@ func getSlotPageBlockData(ctx context.Context, blockData *services.CombinedBlock
 
 		// EIP-7928 Block Access List — the chainservice sources the bytes
 		// either from the envelope (fresh from the node) or from blockdb
-		// (preserved after the node pruned it).
+		// (preserved after the node pruned it). Only the summary is part of the
+		// page; the entries are loaded lazily via /slot/{slotOrHash}/bal.
 		if len(blockData.BlockAccessList) > 0 {
 			accesses, err := utils.DecodeBlockAccessList(blockData.BlockAccessList)
 			if err != nil {
 				logrus.Errorf("error decoding block access list for slot %v: %v", blockData.Header.Message.Slot, err)
 			} else {
-				pageData.ExecutionData.BlockAccessList = convertBALToModel(accesses)
-				pageData.ExecutionData.BALSummary = computeBALSummary(pageData.ExecutionData.BlockAccessList)
+				pageData.ExecutionData.BALSummary = computeBALSummary(accesses)
 			}
 		}
 
@@ -1136,11 +1171,6 @@ func getSlotPageBlockData(ctx context.Context, blockData *services.CombinedBlock
 		getSlotPagePtcVotes(pageData, blockData, blockData.Header.Message.Slot)
 	}
 
-	// Load inclusion lists for EIP-7805 (heze+) slots
-	if services.GlobalBeaconService.GetChainState().IsEip7805Enabled(epoch) {
-		getSlotPageInclusionLists(pageData, blockData.Header.Message.Slot)
-	}
-
 	return pageData
 }
 
@@ -1151,6 +1181,7 @@ var slotTxTypeNames = map[uint8]string{
 	2: "EIP-1559",
 	3: "Blob",
 	4: "EIP-7702",
+	6: "Frame",
 }
 
 func getSlotPageTransactions(ctx context.Context, pageData *models.SlotPageBlockData, transactions []bellatrix.Transaction, blockUid uint64) {
@@ -1164,9 +1195,7 @@ func getSlotPageTransactions(ctx context.Context, pageData *models.SlotPageBlock
 	sysContracts := services.GlobalBeaconService.GetSystemContractAddresses()
 
 	for idx, txBytes := range transactions {
-		var tx ethtypes.Transaction
-
-		err := tx.UnmarshalBinary(txBytes)
+		tx, err := txtypes.DecodeTx(txBytes)
 		if err != nil {
 			logrus.Warnf("error decoding transaction 0x%x.%v: %v\n", pageData.BlockRoot, idx, err)
 			continue
@@ -1194,18 +1223,23 @@ func getSlotPageTransactions(ctx context.Context, pageData *models.SlotPageBlock
 		}
 		txData.DataLen = uint64(len(txData.Data))
 
-		chainId := tx.ChainId()
-		if chainId != nil && chainId.Cmp(big.NewInt(0)) == 0 {
-			chainId = nil
-		}
-		txFrom, err := ethtypes.Sender(ethtypes.LatestSignerForChainID(chainId), &tx)
+		txFrom, err := tx.From(tx.ChainId())
 		if err != nil {
 			logrus.Warnf("error decoding transaction sender 0x%x.%v: %v\n", pageData.BlockRoot, idx, err)
 		} else {
 			txData.From = txFrom.Bytes()
 		}
+
+		// A frame transaction addresses each of its frames separately. What To() reports
+		// for one is the first SENDER frame's target, which is neither the transaction's
+		// recipient nor, when it is absent, a contract creation.
 		txTo := tx.To()
-		if txTo != nil {
+
+		if frameTx, ok := tx.Inner().(*txtypes.FrameTx); ok {
+			txData.IsMultiTarget = true
+			txData.FrameCount = uint64(len(frameTx.Frames))
+			txTo = nil
+		} else if txTo != nil {
 			txData.To = txTo.Bytes()
 		}
 
@@ -1213,7 +1247,7 @@ func getSlotPageTransactions(ctx context.Context, pageData *models.SlotPageBlock
 		txHashMap[string(txHash[:])] = txData
 
 		// check call fn signature
-		isCreate := txTo == nil
+		isCreate := txTo == nil && !txData.IsMultiTarget
 		if txData.DataLen >= 4 {
 			// Skip fn signature lookup for deployments, precompiles, and system contracts
 			if skip, altName := utils.ShouldSkipSignatureLookup(txData.To, isCreate, sysContracts); skip {
@@ -1265,6 +1299,7 @@ func getSlotPageTransactions(ctx context.Context, pageData *models.SlotPageBlock
 				}
 
 				txData.HasElData = true
+				pageData.TransactionsIndexed = true
 				txData.Reverted = elTx.RevertID > 0
 				if elTx.RevertID > 0 {
 					revertIDMap[elTx.RevertID] = append(revertIDMap[elTx.RevertID], txData)
@@ -1470,27 +1505,21 @@ func getSlotPageBuilderExits(ctx context.Context, pageData *models.SlotPageBlock
 }
 
 func getSlotPageExecutionProofs(pageData *models.SlotPageBlockData, blockRoot phase0.Root, slot uint64) {
-	// Get a ready beacon client to fetch execution proofs
-	beaconIndexer := services.GlobalBeaconService.GetBeaconIndexer()
-	client := beaconIndexer.GetReadyClient(false)
-	if client == nil {
-		// No client available, return empty proofs
-		pageData.ExecutionProofsCount = 0
-		pageData.ExecutionProofs = []*models.SlotPageExecutionProof{}
-		return
-	}
-
-	// Fetch execution proofs from the beacon node
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	proofsResponse, err := client.GetClient().GetRPCClient().GetExecutionProofsByBlockroot(ctx, blockRoot[:])
-	if err != nil {
-		// Error fetching proofs, return empty list
-		logrus.WithError(err).WithField("blockRoot", fmt.Sprintf("0x%x", blockRoot)).Info("Error fetching execution proofs")
-		pageData.ExecutionProofsCount = 0
-		pageData.ExecutionProofs = []*models.SlotPageExecutionProof{}
-		return
+	// Use the first ready beacon client that returns proofs. A client without a proof engine returns an empty list.
+	proofsResponse := &rpc.ExecutionProofsResponse{}
+	for _, client := range services.GlobalBeaconService.GetBeaconIndexer().GetReadyClients(false) {
+		response, err := client.GetClient().GetRPCClient().GetExecutionProofsByBlockroot(ctx, blockRoot[:])
+		if err != nil {
+			logrus.WithError(err).WithField("blockRoot", fmt.Sprintf("0x%x", blockRoot)).WithField("client", client.GetClient().GetName()).Info("Error fetching execution proofs")
+			continue
+		}
+		if len(response.Data) > 0 {
+			proofsResponse = response
+			break
+		}
 	}
 
 	// Block hash is sourced from the execution payload on the page itself,
@@ -1502,6 +1531,11 @@ func getSlotPageExecutionProofs(pageData *models.SlotPageBlockData, blockRoot ph
 
 	pageData.ExecutionProofs = make([]*models.SlotPageExecutionProof, 0, len(proofsResponse.Data))
 	for _, proof := range proofsResponse.Data {
+		proofType, err := strconv.ParseUint(proof.Message.ProofType, 10, 8)
+		if err != nil {
+			logrus.WithError(err).WithField("proofType", proof.Message.ProofType).Warn("Error decoding proof type")
+			continue
+		}
 		proofData, err := hex.DecodeString(strings.TrimPrefix(proof.Message.ProofData, "0x"))
 		if err != nil {
 			logrus.WithError(err).WithField("proofType", proof.Message.ProofType).Warn("Error decoding proof data")
@@ -1509,7 +1543,7 @@ func getSlotPageExecutionProofs(pageData *models.SlotPageBlockData, blockRoot ph
 		}
 
 		pageData.ExecutionProofs = append(pageData.ExecutionProofs, &models.SlotPageExecutionProof{
-			ProofId:   proof.Message.ProofType,
+			ProofId:   uint8(proofType),
 			Slot:      slot,
 			BlockHash: blockHash,
 			BlockRoot: blockRoot[:],
@@ -1556,8 +1590,14 @@ func getSlotPageBids(ctx context.Context, pageData *models.SlotPageBlockData, bl
 			ParentSlot:   bid.ParentSlot,
 			ParentKnown:  bid.ParentKnown,
 			IsParentBid:  bid.ParentClass == services.BidParentClassParent,
+			SeenCount:    bid.SeenCount,
+			SeenTotal:    bid.SeenTotal,
 		}
 		bidData.ClassLabel, bidData.ClassColor, bidData.ClassTitle = describeBidClass(bid)
+		bidData.SeenColor = seenBadgeColor(bid.SeenCount, bid.SeenTotal)
+		if !bidData.IsSelfBuilt {
+			pageData.HasGossipBids = true
+		}
 
 		pageData.Bids = append(pageData.Bids, bidData)
 	}
@@ -1572,6 +1612,21 @@ func getSlotPageBids(ctx context.Context, pageData *models.SlotPageBlockData, bl
 	})
 
 	pageData.BidsCount = uint64(len(pageData.Bids))
+}
+
+// seenBadgeColor derives the badge color for a bid's gossip visibility:
+// green = all connected clients saw it, yellow = majority, red = minority.
+func seenBadgeColor(seenCount, seenTotal uint32) string {
+	switch {
+	case seenTotal == 0:
+		return "secondary"
+	case seenCount >= seenTotal:
+		return "success"
+	case seenCount*2 >= seenTotal:
+		return "warning"
+	default:
+		return "danger"
+	}
 }
 
 // describeBidClass derives the display label, badge color and tooltip for a classified bid.
@@ -1722,118 +1777,6 @@ func getSlotPagePtcVotes(pageData *models.SlotPageBlockData, blockData *services
 	pageData.PtcVotesCount = totalVotes
 }
 
-// getSlotPageInclusionLists fetches cached inclusion lists for the slot and decodes their transactions.
-func getSlotPageInclusionLists(pageData *models.SlotPageBlockData, slot phase0.Slot) {
-	beaconIndexer := services.GlobalBeaconService.GetBeaconIndexer()
-	inclusionLists := beaconIndexer.GetInclusionListsBySlot(slot)
-	if len(inclusionLists) == 0 {
-		return
-	}
-
-	// Build a set of block transaction hashes for inclusion checking
-	blockTxHashes := make(map[string]bool, len(pageData.Transactions))
-	for _, tx := range pageData.Transactions {
-		blockTxHashes[string(tx.Hash)] = true
-	}
-
-	sysContracts := services.GlobalBeaconService.GetSystemContractAddresses()
-
-	pageData.InclusionLists = make([]*models.SlotPageInclusionList, 0, len(inclusionLists))
-	for _, il := range inclusionLists {
-		ilData := &models.SlotPageInclusionList{
-			Validator: types.NamedValidator{
-				Index: uint64(il.Message.ValidatorIndex),
-				Name:  services.GlobalBeaconService.GetValidatorNameAt(uint64(il.Message.ValidatorIndex), slot),
-			},
-			InclusionListCommitteeRoot: il.Message.InclusionListCommitteeRoot[:],
-			Signature:                  il.Signature[:],
-		}
-
-		ilData.Transactions = decodeInclusionListTransactions(il, sysContracts)
-		ilData.TransactionsCount = uint64(len(ilData.Transactions))
-
-		// Check which IL transactions are included in the block
-		ilData.TransactionsIncluded = make([]bool, len(ilData.Transactions))
-		for i, tx := range ilData.Transactions {
-			ilData.TransactionsIncluded[i] = blockTxHashes[string(tx.Hash)]
-		}
-
-		pageData.InclusionLists = append(pageData.InclusionLists, ilData)
-	}
-
-	pageData.InclusionListsCount = uint64(len(pageData.InclusionLists))
-}
-
-// decodeInclusionListTransactions decodes the raw transactions from an inclusion list.
-func decodeInclusionListTransactions(il *v1.SignedInclusionList, sysContracts map[common.Address]string) []*models.SlotPageTransaction {
-	txList := make([]*models.SlotPageTransaction, 0, len(il.Message.Transactions))
-
-	for idx, txBytes := range il.Message.Transactions {
-		var tx ethtypes.Transaction
-
-		err := tx.UnmarshalBinary(txBytes)
-		if err != nil {
-			logrus.Warnf("error decoding inclusion list transaction %v.%v: %v", il.Message.ValidatorIndex, idx, err)
-			continue
-		}
-
-		txHash := tx.Hash()
-		txBigFloat := new(big.Float).SetInt(tx.Value())
-		txBigFloat.Quo(txBigFloat, new(big.Float).SetInt(utils.ETH))
-		txValue, _ := txBigFloat.Float64()
-
-		txType := uint8(tx.Type())
-		typeName := slotTxTypeNames[txType]
-		if typeName == "" {
-			typeName = fmt.Sprintf("Type %d", txType)
-		}
-
-		txData := &models.SlotPageTransaction{
-			Index:    uint64(idx),
-			Hash:     txHash[:],
-			Value:    txValue,
-			Data:     tx.Data(),
-			Type:     uint64(txType),
-			TypeName: typeName,
-			GasLimit: tx.Gas(),
-		}
-		txData.DataLen = uint64(len(txData.Data))
-
-		chainId := tx.ChainId()
-		if chainId != nil && chainId.Cmp(big.NewInt(0)) == 0 {
-			chainId = nil
-		}
-		txFrom, err := ethtypes.Sender(ethtypes.LatestSignerForChainID(chainId), &tx)
-		if err == nil {
-			txData.From = txFrom.Bytes()
-		}
-		txTo := tx.To()
-		if txTo != nil {
-			txData.To = txTo.Bytes()
-		}
-
-		// Check call fn signature
-		isCreate := txTo == nil
-		if txData.DataLen >= 4 {
-			if skip, altName := utils.ShouldSkipSignatureLookup(txData.To, isCreate, sysContracts); skip {
-				txData.FuncSigStatus = 10
-				txData.FuncName = altName
-			} else {
-				txData.FuncBytes = fmt.Sprintf("0x%x", txData.Data[0:4])
-				txData.FuncName = txData.FuncBytes
-				txData.FuncSigStatus = 0
-			}
-		} else {
-			txData.FuncSigStatus = 10
-			txData.FuncName = "transfer"
-		}
-
-		txList = append(txList, txData)
-	}
-
-	return txList
-}
-
 // handleSlotParseAccessList accepts RLP-encoded BAL bytes and returns the
 // decoded, UI-ready representation as JSON. Used by the BAL inspector UI
 // to preview arbitrary access lists pasted by the user.
@@ -1931,17 +1874,18 @@ func convertBALToModel(accesses []utils.BALAccountAccess) []*models.SlotPageBloc
 }
 
 // computeBALSummary aggregates block-level BAL statistics for EIP-8038 visibility.
-func computeBALSummary(entries []*models.SlotPageBlockAccessListEntry) *models.SlotPageBALSummary {
-	if len(entries) == 0 {
+func computeBALSummary(accesses []utils.BALAccountAccess) *models.SlotPageBALSummary {
+	if len(accesses) == 0 {
 		return nil
 	}
 	s := &models.SlotPageBALSummary{
-		UniqueAddresses: uint64(len(entries)),
+		UniqueAddresses: uint64(len(accesses)),
 	}
-	for _, e := range entries {
-		s.StorageSlotWrites += uint64(len(e.StorageChanges))
-		for _, sc := range e.StorageChanges {
-			s.StorageWriteOps += uint64(len(sc.Changes))
+	for i := range accesses {
+		e := &accesses[i]
+		s.StorageSlotWrites += uint64(len(e.StorageWrites))
+		for _, sw := range e.StorageWrites {
+			s.StorageWriteOps += uint64(len(sw.Accesses))
 		}
 		s.ColdStorageReads += uint64(len(e.StorageReads))
 		s.BalanceChanges += uint64(len(e.BalanceChanges))

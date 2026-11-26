@@ -324,7 +324,7 @@
         });
       }
 
-      var tab = new bootstrap.Tab(tabEl);
+      var tab = new bootstrap.Tab(link);
       tab.show();
 
       window.history.replaceState(null, document.title, "/validator/{{ .Index }}" + link.getAttribute('href'));
@@ -335,6 +335,6 @@
 {{ template "txDetailsModal-js" . }}
 {{ end }}
 {{ define "css" }}
-<link rel="stylesheet" href="/css/validator.css" />
+<link rel="stylesheet" href="/css/validator.css?v={{ assetVersion }}" />
 {{ template "txDetailsModal-css" . }}
 {{ end }}

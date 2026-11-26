@@ -125,8 +125,8 @@ func buildIndexPageData(ctx context.Context) (*models.IndexPageData, time.Durati
 		DepositContract:       common.Address(specs.DepositContractAddress).String(),
 		ShowSyncingMessage:    !isSynced,
 		SlotsPerEpoch:         specs.SlotsPerEpoch,
-		SlotDurationMs:        specs.SlotDurationMs,
-		EpochDurationMs:       specs.SlotDurationMs * specs.SlotsPerEpoch,
+		SlotDurationMs:        uint64(chainState.GetCurrentSlotDuration().Milliseconds()),
+		EpochDurationMs:       uint64(chainState.GetCurrentSlotDuration().Milliseconds()) * specs.SlotsPerEpoch,
 		CurrentEpoch:          uint64(currentEpoch),
 		CurrentFinalizedEpoch: int64(finalizedEpoch),
 		CurrentJustifiedEpoch: int64(justifiedEpoch),
@@ -161,7 +161,8 @@ func buildIndexPageData(ctx context.Context) (*models.IndexPageData, time.Durati
 		if queuedDeposits != nil {
 			pageData.EnteringValidatorCount = queuedDeposits.TotalNew
 			pageData.EnteringEtherAmount = uint64(queuedDeposits.TotalGwei)
-			pageData.EtherChurnPerEpoch = chainState.GetActivationExitChurnLimit(pageData.TotalEligibleEther)
+			// Deposits consume the activation-only churn budget from Gloas on (EIP-8061).
+			pageData.EtherChurnPerEpoch = chainState.GetActivationChurnLimit(currentEpoch, pageData.TotalEligibleEther)
 			pageData.EtherChurnPerDay = pageData.EtherChurnPerEpoch * 225
 
 			// QueueEstimation is the epoch the queue is fully processed; render the remaining
@@ -315,66 +316,45 @@ func buildIndexPageData(ctx context.Context) (*models.IndexPageData, time.Durati
 		})
 	}
 
-	// Add BPO forks from BLOB_SCHEDULE
-	elBlobSchedule := services.GlobalBeaconService.GetExecutionChainState().GetFullBlobSchedule()
-	if len(elBlobSchedule) > 0 {
-		// get blob schedule from el config (we have the full blob schedule available)
-		bpoIdx := 0
-		for _, blobSchedule := range elBlobSchedule {
-			if !blobSchedule.IsBpo {
-				continue
-			}
+	if specs.Eip8198ForkEpoch != nil && *specs.Eip8198ForkEpoch < uint64(18446744073709551615) {
+		blobParams := chainState.GetBlobScheduleForEpoch(phase0.Epoch(*specs.Eip8198ForkEpoch))
+		forkDigest := chainState.GetForkDigest(specs.Eip8198ForkVersion, blobParams)
+		pageData.NetworkForks = append(pageData.NetworkForks, &models.IndexPageDataForks{
+			Name:       "EIP-8198",
+			Epoch:      *specs.Eip8198ForkEpoch,
+			Version:    specs.Eip8198ForkVersion[:],
+			Time:       uint64(chainState.EpochToTime(phase0.Epoch(*specs.Eip8198ForkEpoch)).Unix()),
+			Active:     uint64(currentEpoch) >= *specs.Eip8198ForkEpoch,
+			Type:       "consensus",
+			ForkDigest: forkDigest[:],
+		})
+	}
 
-			bpoIdx++
+	// Add BPO forks (from el genesis config if available, cl BLOB_SCHEDULE otherwise)
+	for _, bpoFork := range services.GlobalBeaconService.GetBpoForks() {
+		pageData.NetworkForks = append(pageData.NetworkForks, &models.IndexPageDataForks{
+			Name:             bpoFork.Name,
+			Epoch:            uint64(bpoFork.Epoch),
+			Version:          nil, // BPO forks don't have fork versions
+			Time:             uint64(bpoFork.Time.Unix()),
+			Active:           currentEpoch >= bpoFork.Epoch,
+			Type:             "bpo",
+			MaxBlobsPerBlock: &bpoFork.MaxBlobsPerBlock,
+			ForkDigest:       bpoFork.ForkDigest[:],
+		})
+	}
 
-			bpoEpoch := phase0.Epoch(0)
-			bpoTime := blobSchedule.Timestamp
-			if blobSchedule.Timestamp.After(networkGenesis.GenesisTime) {
-				bpoEpoch = chainState.EpochOfSlot(chainState.TimeToSlot(blobSchedule.Timestamp))
-			} else {
-				bpoTime = networkGenesis.GenesisTime
-			}
-
-			forkVersion := chainState.GetForkVersionAtEpoch(bpoEpoch)
-			blobParams := &consensus.BlobScheduleEntry{
-				Epoch:            uint64(bpoEpoch),
-				MaxBlobsPerBlock: blobSchedule.Schedule.Max,
-			}
-			forkDigest := chainState.GetForkDigest(forkVersion, blobParams)
-
-			pageData.NetworkForks = append(pageData.NetworkForks, &models.IndexPageDataForks{
-				Name:             fmt.Sprintf("BPO%d", bpoIdx),
-				Epoch:            uint64(bpoEpoch),
-				Version:          nil,
-				Time:             uint64(bpoTime.Unix()),
-				Active:           currentEpoch >= bpoEpoch,
-				Type:             "bpo",
-				MaxBlobsPerBlock: &blobSchedule.Schedule.Max,
-				ForkDigest:       forkDigest[:],
-			})
-		}
-	} else {
-		// get blob schedule from cl specs (no el config available, so we only get the deduplicated blob schedule from the cl specs)
-		for i, blobSchedule := range specs.BlobSchedule {
-			// BPO forks use the fork version that's active at the time of BPO activation
-			forkVersion := chainState.GetForkVersionAtEpoch(phase0.Epoch(blobSchedule.Epoch))
-			blobParams := &consensus.BlobScheduleEntry{
-				Epoch:            blobSchedule.Epoch,
-				MaxBlobsPerBlock: blobSchedule.MaxBlobsPerBlock,
-			}
-			forkDigest := chainState.GetForkDigest(forkVersion, blobParams)
-
-			pageData.NetworkForks = append(pageData.NetworkForks, &models.IndexPageDataForks{
-				Name:             fmt.Sprintf("BPO%d", i+1),
-				Epoch:            blobSchedule.Epoch,
-				Version:          nil, // BPO forks don't have fork versions
-				Time:             uint64(chainState.EpochToTime(phase0.Epoch(blobSchedule.Epoch)).Unix()),
-				Active:           uint64(currentEpoch) >= blobSchedule.Epoch,
-				Type:             "bpo",
-				MaxBlobsPerBlock: &blobSchedule.MaxBlobsPerBlock,
-				ForkDigest:       forkDigest[:],
-			})
-		}
+	// Add EL-only forks (EL fork scheduled while its CL counterpart is not)
+	for _, elFork := range services.GlobalBeaconService.GetElOnlyForks() {
+		pageData.NetworkForks = append(pageData.NetworkForks, &models.IndexPageDataForks{
+			Name:       elFork.Name,
+			Epoch:      uint64(elFork.Epoch),
+			Version:    nil, // the CL fork version does not change
+			Time:       uint64(elFork.Time.Unix()),
+			Active:     currentEpoch >= elFork.Epoch,
+			Type:       "execution",
+			ForkDigest: elFork.ForkDigest[:],
+		})
 	}
 
 	// Sort all forks by epoch
@@ -447,15 +427,17 @@ func buildIndexPageRecentEpochsData(ctx context.Context, pageData *models.IndexP
 
 // resolveBuildSource maps a db builder index (-1 = self-built) to the model fields
 // driving the proposer build-source icon (house / hard-hat), matching the slots page.
-func resolveBuildSource(dbBuilderIndex int64) (hasBuilder bool, builderIndex uint64, builderURL string) {
+func resolveBuildSource(dbBuilderIndex int64) (hasBuilder bool, builderIndex uint64, builderName string, builderURL string) {
 	if dbBuilderIndex == -1 {
-		return true, math.MaxUint64, ""
+		return true, math.MaxUint64, "", ""
 	}
 	if dbBuilderIndex < 0 {
-		return false, 0, ""
+		return false, 0, "", ""
 	}
 	builderIndex = uint64(dbBuilderIndex)
-	return true, builderIndex, services.GlobalBeaconService.GetBuilderURL(builderIndex)
+	builderName = services.GlobalBeaconService.GetValidatorName(builderIndex | services.BuilderIndexFlag)
+	builderURL = services.GlobalBeaconService.GetBuilderURL(builderIndex)
+	return true, builderIndex, builderName, builderURL
 }
 
 func buildIndexPageRecentBlocksData(ctx context.Context, pageData *models.IndexPageData, recentBlockCount int) {
@@ -495,7 +477,7 @@ func buildIndexPageRecentBlocksData(ctx context.Context, pageData *models.IndexP
 			PayloadStatus: uint8(payloadStatus),
 			BlockRoot:     blockData.Root,
 		}
-		blockModel.HasBuilder, blockModel.BuilderIndex, blockModel.BuilderURL = resolveBuildSource(blockData.BuilderIndex)
+		blockModel.HasBuilder, blockModel.BuilderIndex, blockModel.BuilderName, blockModel.BuilderURL = resolveBuildSource(blockData.BuilderIndex)
 		if blockData.EthBlockNumber != nil {
 			blockModel.WithEthBlock = true
 			blockModel.EthBlock = *blockData.EthBlockNumber
@@ -555,7 +537,7 @@ func buildIndexPageRecentSlotsData(ctx context.Context, pageData *models.IndexPa
 				ForkGraph:     make([]*models.IndexPageDataForkGraph, 0),
 			}
 			if dbSlot.Status > 0 {
-				slotData.HasBuilder, slotData.BuilderIndex, slotData.BuilderURL = resolveBuildSource(dbSlot.BuilderIndex)
+				slotData.HasBuilder, slotData.BuilderIndex, slotData.BuilderName, slotData.BuilderURL = resolveBuildSource(dbSlot.BuilderIndex)
 			}
 			pageData.RecentSlots = append(pageData.RecentSlots, slotData)
 			blockCount++
